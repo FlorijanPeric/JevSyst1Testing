@@ -1,0 +1,47 @@
+[
+  {
+    "id": "ana",
+    "name": "Ana Novak",
+    "email": "ana.novak@example.com",
+    "role": "Returns & exchanges lead",
+    "responsibilities": [
+      "Approves returns and exchanges",
+      "Handles wrong-size or wrong-item deliveries",
+      "Manages warehouse return labels"
+    ],
+    "example_emails": [
+      "I got the wrong size, can I exchange it?",
+      "The package contained a completely different product than I ordered."
+    ]
+  },
+  {
+    "id": "marko",
+    "name": "Marko Kovač",
+    "email": "marko.kovac@example.com",
+    "role": "Logistics coordinator",
+    "responsibilities": [
+      "Tracks delayed or lost packages",
+      "Files carrier claims",
+      "Answers delivery time questions"
+    ],
+    "example_emails": [
+      "My package says delivered but I never got it.",
+      "Order has been stuck in transit for two weeks."
+    ]
+  },
+  {
+    "id": "petra",
+    "name": "Petra Horvat",
+    "email": "petra.horvat@example.com",
+    "role": "Billing specialist",
+    "responsibilities": [
+      "Processes refunds to payment methods",
+      "Investigates duplicate or incorrect charges",
+      "Issues invoices and VAT documents"
+    ],
+    "example_emails": [
+      "I was charged twice for the same order.",
+      "Can you send me an invoice with my company VAT number?"
+    ]
+  }
+]

@@ -1,0 +1,107 @@
+expected,email
+aleksander,What fee should I set for a Bitcoin transaction right now?
+aleksander,Our BTC node is stuck syncing at block 800000.
+aleksander,Can we pay the supplier in USDT?
+aleksander,Is a hardware wallet safer than an exchange account?
+aleksander,Koliko stane postavitev lastnega Bitcoin vozlišča?
+aleksander,Explain proof of work vs proof of stake for our report.
+aleksander,Can you send me the updated version of your workflow doc?
+aleksander,We want to issue our own token for the community.
+niki,Can you print a replacement knob for the oscilloscope?
+niki,PLA keeps warping on the print bed.
+niki,We need oak shelves for the meeting corner.
+niki,How long would a 20 cm 3D print take?
+niki,Lahko izrežeš logotip iz vezane plošče z laserjem?
+niki,"The resin printer smells, is that normal?"
+niki,I need a physical mockup of our device for the fair.
+niki,Can you sand and varnish the old desk?
+domen,Should we fine-tune Llama or use RAG for our documents?
+domen,Our classifier predicts the same class for everything.
+domen,How many GPUs do we need to train on 1M images?
+domen,Can you build an object detector for the camera feed?
+domen,Natreniran model daje slabe rezultate na testni množici.
+domen,Which embedding model works best for Slovenian?
+domen,Our chatbot hallucinates answers.
+domen,Help me tune the learning rate of my neural net.
+jernej,Please sign the consortium agreement by Monday.
+jernej,Our Horizon Europe proposal needs a final review.
+jernej,Could you be a keynote speaker at our conference?
+jernej,I'd like to discuss the strategic plan for next year.
+jernej,Prosim za soglasje k nakupu nove opreme.
+jernej,"Would you co-author our journal paper?"
+jernej,"Hi, I don't know who handles this, can you help?"
+jernej,I'm a student looking for a master thesis topic.
+tilen,The homepage loads very slowly.
+tilen,Please renew the domain for our project site.
+tilen,The cookie banner covers the whole page on phones.
+tilen,Can you add a registration form to the event page?
+tilen,Na spletni strani manjka nova fotografija ekipe.
+tilen,Google can't find our website in search results.
+tilen,The WordPress plugin update broke the layout.
+tilen,HTTPS shows 'not secure' on our site.
+eva,I haven't received my salary for September.
+eva,How do I claim daily allowance for my business trip?
+eva,Please pay the attached invoice from our hosting provider.
+eva,We need the annual financial report for the audit.
+eva,Ali je bilo nakazilo dobavitelju že izvedeno?
+eva,Which cost center should I book the conference fee to?
+luka,My mouse and keyboard stopped working.
+luka,VPN disconnects every 10 minutes.
+luka,I'm locked out of my account after too many attempts.
+luka,The scanner on the second floor doesn't send to email.
+luka,Prosim za namestitev Office paketa.
+luka,Teams calls have no sound on my laptop.
+sara,Someone sent an invoice with a strange .exe attachment.
+sara,Antivirus found a trojan on my PC.
+sara,We should enable 2FA for all admin accounts.
+sara,Customer data might have leaked yesterday.
+sara,Ali lahko preveriš varnost naših strežnikov?
+sara,Please run a phishing awareness test for staff.
+matej,The ESP32 keeps rebooting.
+matej,Which motor driver should I use for a small robot?
+matej,Can you design a PCB for our sensor board?
+matej,The power supply smells burnt.
+matej,Kako priklopim senzor vlage na Raspberry Pi?
+matej,Our IoT gateway lost its firmware after an update.
+ana,Can you write a LinkedIn post about our award?
+ana,We need a banner for the conference booth.
+ana,Let's promote the hackathon on Instagram.
+ana,Who can take photos at the open day?
+ana,Pripravi plakat za predavanje.
+ana,Our Facebook page has no posts since March.
+tina,The door to the lab doesn't lock.
+tina,Can you book room 2 for a thesis defense?
+tina,The air conditioning in the lecture hall is broken.
+tina,We need two new office chairs.
+tina,Kje lahko parkiram v petek?
+tina,Did my courier package arrive?
+rok,"The Postgres database is full, disk at 98%."
+rok,Restore the customers table from last week's backup.
+rok,Build a Power BI report from our sales data.
+rok,The data warehouse load failed last night.
+rok,Potrebujem SQL poizvedbo za mesečno statistiko.
+rok,Our queries got slow after the data grew to 10M rows.
+nina,Is this contract clause about liability fair?
+nina,A user asks us to delete all their personal data.
+nina,Someone copied our trademark.
+nina,Can we use MIT licensed code in our product?
+nina,Ali potrebujemo DPO po GDPR?
+nina,Please write the terms of service for our app.
+jan,The Android app freezes on login.
+jan,Apple rejected our build for missing privacy text.
+jan,Can we send push notifications for new messages?
+jan,The iOS app layout breaks on iPad.
+jan,Aplikacija porabi preveč baterije.
+jan,Should we use React Native for the new app?
+petra,Please book a hotel in Berlin for 3 nights.
+petra,Organize lunch for the project meeting next week.
+petra,We need a venue for 150 people in March.
+petra,Can you arrange name badges for the workshop?
+petra,Rezerviraj let za Lizbono.
+petra,Plan a Christmas party for the department.
+manual_triage,Do you sell gift cards?
+manual_triage,I want to order a pizza with extra cheese.
+manual_triage,"Congratulations, you won a free iPhone! Click here."
+manual_triage,What's the weather in Koper tomorrow?
+manual_triage,Can you recommend a good dentist?
+manual_triage,"Prodam rabljen avto, zanima?"

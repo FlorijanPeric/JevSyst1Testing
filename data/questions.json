@@ -1,0 +1,39 @@
+{
+  "spam": {
+    "type": "noul",
+    "instructions": "Is this spam, advertising, a scam or a mass newsletter?"
+  },
+  "language": {
+    "type": "choice",
+    "instructions": "Which language is this email written in?",
+    "criteria": {
+      "sl": "Slovenian",
+      "en": "English",
+      "other": "Any other language"
+    }
+  },
+  "type": {
+    "type": "choice",
+    "instructions": "What kind of email is this?",
+    "criteria": {
+      "question": "Asks for information or help",
+      "request": "Asks someone to do or make something",
+      "problem": "Reports something broken or not working",
+      "proposal": "Offers a partnership, collaboration or deal",
+      "spam": "Advertising, newsletter or irrelevant"
+    }
+  },
+  "needs_reply": {
+    "type": "noul",
+    "instructions": "Does the sender expect a reply?"
+  },
+  "urgency": {
+    "type": "score",
+    "instructions": "How urgent is this email?",
+    "criteria": [
+      "Can wait",
+      "Should be handled this week",
+      "Urgent: needs attention today"
+    ]
+  }
+}

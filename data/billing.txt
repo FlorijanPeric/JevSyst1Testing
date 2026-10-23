@@ -1,0 +1,7 @@
+Billing and refunds policy.
+
+Refunds are issued to the original payment method within 5-10 business days of processing.
+
+Duplicate charges are refunded automatically once flagged; contact support with the transaction ID to speed this up.
+
+Gift card balances do not expire and cannot be refunded to a credit card.

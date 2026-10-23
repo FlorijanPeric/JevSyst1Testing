@@ -1,0 +1,12 @@
+# One email per line. Includes near-duplicates (should hit the cache) and ambiguous ones (should need the LLM).
+I received size 8 shoes but I ordered size 10, can I exchange them?
+I got size 8 shoes instead of size 10, can I exchange them?
+The box had a blue jacket inside but I ordered a red one.
+My package says delivered but it's not at my door.
+Tracking says delivered but I never got my package.
+My order has been stuck in transit for 12 days.
+I was charged twice for order #4411.
+I was charged two times for order #5120.
+Please send an invoice with our company VAT number SI12345678.
+The parcel arrived late and the shoes inside were the wrong size, I want my money back.
+Do you have any job openings in your warehouse?

@@ -1,0 +1,4 @@
+qdrant-client>=1.17,<1.19
+openai>=1.30
+python-dotenv>=1.0
+requests>=2.31

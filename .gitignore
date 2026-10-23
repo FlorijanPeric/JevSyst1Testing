@@ -1,0 +1,17 @@
+.env
+data/colleagues.json
+__pycache__/
+*.pyc
+.venv/
+qdrant_storage/
+data/colleagues.csv
+data/colleagues.backup.csv
+data/colleagues.real.csv
+postman/email_router.postman_environment.json
+data/my_inputs.csv
+experiments/cache/
+experiments/run.log
+data/worst_queries.csv
+data/inbox_sorted.csv
+postman/
+experiments/run*.log
