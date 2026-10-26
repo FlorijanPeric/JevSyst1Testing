@@ -32,12 +32,15 @@ class Timer:
         return sum(self.stages.values())
 
 
-def shortlist(client: QdrantClient, vector: list[float], candidates: int) -> list[dict]:
-    """Score every colleague locally and return the best `candidates`.
+def shortlist(client: QdrantClient, vector: list[float], candidates: int, ranking: str = "window") -> list[dict]:
+    """Score every colleague locally and return the best `candidates`, ranked by "score".
 
-    Score = average similarity to the person's two "grouped" vectors (duties, example emails);
-    Qdrant's multivector search only does best-match (MaxSim), which ranked worse in the benchmark.
-    Fetching all points is fine for a team of tens of people; for thousands, prefilter with a Qdrant query.
+    score         = average similarity to the person's "window" vectors (3-line windows); ranks
+                    candidates for system one. Best in the 436-email benchmark (85.1%).
+    grouped_score = average similarity to the two "grouped" vectors (duties, examples); drives the
+                    fast path, where it is more reliable (98% correct at 0.50/0.07).
+    Qdrant's multivector search only does best-match (MaxSim), which ranked worse, so scores are
+    computed here. Fetching all points is fine for tens of people; for thousands, prefilter in Qdrant.
     "matched" = the person's two best-matching lines, which system one sees.
     """
     query = np.asarray(vector) / np.linalg.norm(vector)
@@ -46,10 +49,15 @@ def shortlist(client: QdrantClient, vector: list[float], candidates: int) -> lis
         vecs = np.asarray(vecs)
         return vecs @ query / np.linalg.norm(vecs, axis=1)
 
-    # Small download for everyone (2 vectors each), line vectors only for the winners.
-    points, _ = client.scroll(config.COLLEAGUES_COLLECTION, limit=10_000, with_payload=False, with_vectors=["grouped"])
-    scores = {point.id: float(sims(point.vector["grouped"]).mean()) for point in points}
+    # Small download for everyone, line vectors only for the winners.
+    points, _ = client.scroll(config.COLLEAGUES_COLLECTION, limit=10_000, with_payload=False,
+                              with_vectors=["window", "grouped"])
+    grouped = {point.id: float(sims(point.vector["grouped"]).mean()) for point in points}
+    scores = grouped if ranking == "grouped" else {point.id: float(sims(point.vector["window"]).mean()) for point in points}
+    by_grouped = sorted(grouped, key=grouped.get, reverse=True)
     top = sorted(scores, key=scores.get, reverse=True)[:candidates]
+    if by_grouped[0] not in top:  # the fast-path pick must be in the list it is picked from
+        top.append(by_grouped[0])
     details = {point.id: point for point in client.retrieve(config.COLLEAGUES_COLLECTION, ids=top,
                                                              with_payload=True, with_vectors=["lines"])}
     people = []
@@ -59,6 +67,9 @@ def shortlist(client: QdrantClient, vector: list[float], candidates: int) -> lis
         people.append({
             "person_id": point.payload["person_id"],
             "score": scores[point_id],
+            "grouped_score": grouped[point_id],
+            # how far ahead of everyone else this person is on grouped scores (negative if not first)
+            "grouped_margin": grouped[point_id] - max(v for k, v in grouped.items() if k != point_id),
             **{k: point.payload[k] for k in ("name", "email", "role")},
             "matched": [point.payload["texts"][i] for i in np.argsort(-line_sims)[:2]],
         })
@@ -72,10 +83,14 @@ def cache_lookup(client: QdrantClient, vector: list[float], threshold: float):
     return hits[0] if hits and hits[0].score >= threshold else None
 
 
-def is_confident(people: list[dict], min_score: float, min_margin: float) -> bool:
-    if not people or people[0]["score"] < min_score:
-        return False
-    return len(people) == 1 or people[0]["score"] - people[1]["score"] >= min_margin
+def fast_pick(people: list[dict], min_score: float, min_margin: float) -> str | None:
+    """The person to forward to without asking system one, or None if the match isn't clear enough."""
+    if not people:
+        return None
+    best = max(people, key=lambda p: p["grouped_score"])
+    if best["grouped_score"] >= min_score and best["grouped_margin"] >= min_margin:
+        return best["person_id"]
+    return None
 
 
 def recipient_question(people: list[dict]) -> dict:
@@ -112,15 +127,38 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args) -
         "confidence": recipient.get("confidence"),
         "final_pick_prob": probs.get(choice),
     }
+    if getattr(args, "tiebreak", False) and choice != MANUAL:
+        choice, verdict["tiebreak"] = tiebreak(email_text, people, probs, args, choice)
     return choice, answers, verdict
+
+
+def tiebreak(email_text: str, people: list[dict], probs: dict, args, choice: str) -> tuple[str, dict | None]:
+    """When the top two are close, ask one narrow yes/no question about just those two.
+
+    A 6-way choice spreads system one's attention; "A rather than B?" is easier for a small model.
+    """
+    ranked = sorted(combined_scores(probs, people, args).items(), key=lambda kv: -kv[1])
+    if len(ranked) < 2 or ranked[0][1] - ranked[1][1] >= args.tiebreak_margin or MANUAL in (ranked[0][0], ranked[1][0]):
+        return choice, None
+    by_id = {p["person_id"]: p for p in people}
+    a, b = by_id[ranked[0][0]], by_id[ranked[1][0]]
+    describe_person = lambda p: f"{p['role']} ({'; '.join(m.split(': ', 1)[-1] for m in p['matched'])})"
+    p_a = classify(email_text, {"a_over_b": {
+        "type": "noul",
+        "instructions": f"Should this email go to the {describe_person(a)} rather than the {describe_person(b)}?",
+    }})["a_over_b"]
+    return (a if p_a >= 0.5 else b)["person_id"], {"between": [a["person_id"], b["person_id"]], "p_first": p_a}
+
+
+def combined_scores(probs: dict, people: list[dict], args) -> dict:
+    best_score = max(p["score"] for p in people)
+    return {p["person_id"]: probs.get(p["person_id"], 0) + args.search_weight * (p["score"] - best_score) for p in people}
 
 
 def pick_recipient(probs: dict, people: list[dict], args) -> str:
     if not people or probs.get(MANUAL, 0) >= args.manual_threshold:
         return MANUAL
-    best_score = people[0]["score"]
-    combined = {p["person_id"]: probs.get(p["person_id"], 0) + args.search_weight * (p["score"] - best_score)
-                for p in people}
+    combined = combined_scores(probs, people, args)
     return max(combined, key=combined.get)
 
 
@@ -148,6 +186,16 @@ def remember(client: QdrantClient, email_text: str, vector: list[float], person:
     )
 
 
+def fix(client: QdrantClient, email_text: str, person_id: str) -> str:
+    """Store a correction in the routing cache, so this and very similar emails go to person_id."""
+    points, _ = client.scroll(config.COLLEAGUES_COLLECTION, limit=10_000, with_payload=True, with_vectors=False)
+    people = {p.payload["person_id"]: p.payload for p in points}
+    if person_id not in people:
+        return f"Unknown person '{person_id}'. Known: {', '.join(sorted(people))}"
+    remember(client, email_text, embed_texts([email_text])[0], people[person_id])
+    return f"Saved: emails like this now go to {people[person_id]['name']} ({person_id})."
+
+
 def route(client: QdrantClient, email_text: str, args, smart: bool = True, questions: dict | None = None) -> dict:
     """smart=False is the baseline: always ask the LLM, like plain RAG.
 
@@ -168,14 +216,16 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
             if is_spam(answers, args):
                 return {"path": "spam", "person": None, "score": None, "people": [],
                         "answers": answers, "verdict": {}, "timer": timer}
-            return {"path": "cache", "person": hit.payload, "score": hit.score, "people": [],
+            person = None if hit.payload.get("person_id") == MANUAL else hit.payload  # a correction to "nobody"
+            return {"path": "cache", "person": person, "score": hit.score, "people": [],
                     "answers": answers, "verdict": {}, "timer": timer}
 
-    people = shortlist(client, vector, args.candidates)
+    people = shortlist(client, vector, args.candidates, args.ranking)
     timer.mark("search")
 
-    if smart and is_confident(people, args.min_score, args.min_margin):
-        path, choice, verdict = "fast", people[0]["person_id"], {}
+    fast = fast_pick(people, args.min_score, args.min_margin) if smart else None
+    if fast:
+        path, choice, verdict = "fast", fast, {}
         answers = classify(email_text, questions) if questions else {}
         timer.mark("questions")
     else:
@@ -303,7 +353,13 @@ def add_routing_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-margin", type=float, default=0.07, help="Fast path: top match must beat #2 by this")
     parser.add_argument("--search-weight", type=float, default=5.0, help="How much the search score counts next to system one")
     parser.add_argument("--manual-threshold", type=float, default=0.7, help="System one must be this sure to pick manual triage")
-    parser.add_argument("--spam-threshold", type=float, default=0.8, help="Don't forward emails whose spam probability is at least this")
+    parser.add_argument("--ranking", choices=["window", "grouped"], default="window",
+                        help="Which vectors rank the candidates for system one (the fast path always uses grouped)")
+    parser.add_argument("--tiebreak", action="store_true",
+                        help="When the top two candidates are close, ask system one a yes/no question about just those two")
+    parser.add_argument("--tiebreak-margin", type=float, default=0.15, help="How close counts as close (combined score)")
+    # 0.95: on 436 test emails, 0.8 wrongly blocked 78 of 400 real requests; 0.95 blocks 3 and still catches 7 junk emails.
+    parser.add_argument("--spam-threshold", type=float, default=0.95, help="Don't forward emails whose spam probability is at least this")
 
 
 def main() -> None:
@@ -314,11 +370,19 @@ def main() -> None:
     parser.add_argument("--no-learn", dest="learn", action="store_false", help="Don't store decisions in the cache")
     parser.add_argument("--benchmark", metavar="FILE", help="File with one email per line; compare smart vs always-LLM")
     parser.add_argument("--forget", action="store_true", help="Delete all cached routing decisions and exit")
+    parser.add_argument("--fix", metavar="PERSON_ID", help="Save the right recipient for this email; similar emails will follow it")
     parser.add_argument("--questions", default="data/questions.json", help="Extra system-one questions to ask per email")
     parser.add_argument("--details", action="store_true", help="Also show match scores and timings")
     args = parser.parse_args()
 
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
+
+    if args.fix:
+        if not args.email:
+            parser.error("--fix needs the email text (or file) too")
+        path = Path(args.email)
+        print(fix(client, path.read_text(encoding="utf-8") if path.is_file() else args.email, args.fix))
+        return
 
     if args.forget:
         if client.collection_exists(config.ROUTED_COLLECTION):

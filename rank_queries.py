@@ -21,7 +21,7 @@ from qdrant_client import QdrantClient
 
 import config
 from clients import classify, embed_texts
-from route_email import MANUAL, add_routing_args, is_confident, pick_recipient, recipient_question, shortlist
+from route_email import MANUAL, add_routing_args, fast_pick, pick_recipient, recipient_question, shortlist
 
 POSTMAN_DIR = Path("postman")
 SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -128,12 +128,12 @@ def main() -> None:
 
     ranked = []
     for i, (row, vector) in enumerate(zip(rows, vectors), 1):
-        people = shortlist(client, vector, args.candidates)
+        people = shortlist(client, vector, args.candidates, args.ranking)
         # Always ask system one, even when the fast path would skip it, so every email gets the same signals.
         answer = classify(row["email"], {"recipient": recipient_question(people)}, raw=True)["recipient"]
         probs = answer["probabilities"]
-        fast = is_confident(people, args.min_score, args.min_margin)
-        final = people[0]["person_id"] if fast else pick_recipient(probs, people, args)
+        fast = fast_pick(people, args.min_score, args.min_margin)
+        final = fast or pick_recipient(probs, people, args)
         score, reasons = badness(people, probs, final, row.get("expected"))
         ranked.append(({**row, "got": final, "path": "fast" if fast else "llm", "badness": score,
                         "system_one_choice": answer.get("choice"), "confidence": answer.get("confidence", 0.0),

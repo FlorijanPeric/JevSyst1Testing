@@ -7,6 +7,7 @@ Nothing is written to Qdrant: no cache lookups and no learning, so every run is 
 """
 import argparse
 import csv
+import json
 import time
 from collections import Counter
 from pathlib import Path
@@ -14,8 +15,8 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 
 import config
-from clients import embed_texts
-from route_email import MANUAL, add_routing_args, ask_system_one, is_confident, shortlist
+from clients import classify, embed_texts
+from route_email import MANUAL, add_routing_args, ask_system_one, fast_pick, shortlist
 
 
 def main() -> None:
@@ -24,12 +25,15 @@ def main() -> None:
     add_routing_args(parser)
     parser.add_argument("--only", help="Only test emails expected for this person id")
     parser.add_argument("--limit", type=int, help="Only test the first N emails")
+    parser.add_argument("--spam", action="store_true",
+                        help="Also apply the spam filter from data/questions.json, as normal routing does (spam counts as manual_triage)")
     args = parser.parse_args()
 
     with Path(args.path).open(encoding="utf-8", newline="") as f:
         tests = [row for row in csv.DictReader(f) if not args.only or row["expected"] == args.only]
     tests = tests[: args.limit] if args.limit else tests
     labeled = bool(tests) and "expected" in tests[0]
+    spam_q = {"spam": json.loads(Path("data/questions.json").read_text(encoding="utf-8"))["spam"]} if args.spam else {}
 
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
     start = time.perf_counter()
@@ -37,13 +41,17 @@ def main() -> None:
 
     results = []
     for i, (test, vector) in enumerate(zip(tests, vectors), 1):
-        people = shortlist(client, vector, args.candidates)
-        if is_confident(people, args.min_score, args.min_margin):
-            path, got, conf = "fast", people[0]["person_id"], None
+        people = shortlist(client, vector, args.candidates, args.ranking)
+        fast = fast_pick(people, args.min_score, args.min_margin)
+        if fast:
+            path, got, conf = "fast", fast, None
+            answers = classify(test["email"], spam_q) if spam_q else {}
         else:
             path = "llm"
-            got, _, verdict = ask_system_one(test["email"], people, {}, args)
+            got, answers, verdict = ask_system_one(test["email"], people, spam_q, args)
             conf = verdict["confidence"]
+        if (answers.get("spam") or 0) >= args.spam_threshold:
+            path, got = "spam", MANUAL
         conf_text = "  -  " if conf is None else f"{conf:4.0%} "
         preview = " ".join(test["email"].split())
         if not labeled:
@@ -65,7 +73,7 @@ def main() -> None:
     total = len(results)
     correct = sum(r["ok"] for r in results)
     print(f"\nAccuracy:        {correct}/{total} ({correct / total:.0%})  in {time.perf_counter() - start:.0f}s")
-    for path in ("fast", "llm"):
+    for path in ("fast", "llm", "spam"):
         rows = [r for r in results if r["path"] == path]
         if rows:
             print(f"  {path:<4} path:     {sum(r['ok'] for r in rows)}/{len(rows)} correct")

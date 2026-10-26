@@ -19,7 +19,7 @@ from clients import embed_texts
 
 
 # Bump when the vector layout changes, so everyone gets re-embedded.
-LAYOUT = "grouped+lines-v1"
+LAYOUT = "window+grouped+lines-v1"
 
 
 def profile_texts(person: dict) -> list[str]:
@@ -42,6 +42,18 @@ def grouped_texts(person: dict) -> list[str]:
     if examples:
         texts.append("Emails like: " + " ".join(examples))
     return texts
+
+
+def window_texts(person: dict, size: int = 3, stride: int = 2) -> list[str]:
+    """Overlapping windows of 3 duty/example lines. Used to rank candidates for system one.
+
+    Best setup in the 436-email benchmark with system one: 85.1% (cross-validated).
+    """
+    role = person["role"].replace(" (fictional)", "")
+    items = person.get("responsibilities", []) + person.get("example_emails", [])
+    if len(items) <= size:
+        return [f"{role}: " + "; ".join(items or [role])]
+    return [f"{role}: " + "; ".join(items[i : i + size]) for i in range(0, len(items) - size + 1, stride)]
 
 
 def point_id(person_id: str) -> str:
@@ -70,10 +82,11 @@ def load_people(path: Path) -> list[dict]:
 
 
 def ensure_collection_layout(client: QdrantClient, name: str, probe_text: str) -> None:
-    """One point per colleague with two named multivectors: "grouped" (scoring) and "lines" (explanations)."""
+    """One point per colleague with three named multivectors: "window" (ranking), "grouped" (fast path)
+    and "lines" (the lines shown to system one)."""
     if client.collection_exists(name):
         vectors = client.get_collection(name).config.params.vectors
-        if isinstance(vectors, dict) and {"grouped", "lines"} <= set(vectors):
+        if isinstance(vectors, dict) and {"window", "grouped", "lines"} <= set(vectors):
             return
         print(f"Recreating {name}: old vector layout.")
         client.delete_collection(name)
@@ -82,8 +95,8 @@ def ensure_collection_layout(client: QdrantClient, name: str, probe_text: str) -
     client.create_collection(
         collection_name=name,
         vectors_config={
-            "grouped": VectorParams(size=size, distance=Distance.COSINE, multivector_config=multi),
-            "lines": VectorParams(size=size, distance=Distance.COSINE, multivector_config=multi),
+            name: VectorParams(size=size, distance=Distance.COSINE, multivector_config=multi)
+            for name in ("window", "grouped", "lines")
         },
     )
 
@@ -107,15 +120,19 @@ def main() -> None:
 
     changed = [p for p in people if args.force or stored.get(p["id"]) != profile_hash(p)]
     if changed:
-        texts_per_person = [(profile_texts(p), grouped_texts(p)) for p in changed]
-        vectors = embed_texts([t for lines, grouped in texts_per_person for t in lines + grouped])
+        texts_per_person = [{"lines": profile_texts(p), "grouped": grouped_texts(p), "window": window_texts(p)}
+                            for p in changed]
+        vectors = embed_texts([t for named in texts_per_person for texts in named.values() for t in texts])
         points, start = [], 0
-        for person, (texts, grouped) in zip(changed, texts_per_person):
-            line_vecs = vectors[start : start + len(texts)]
-            grouped_vecs = vectors[start + len(texts) : start + len(texts) + len(grouped)]
+        for person, named in zip(changed, texts_per_person):
+            named_vecs = {}
+            for vector_name, texts in named.items():
+                named_vecs[vector_name] = vectors[start : start + len(texts)]
+                start += len(texts)
+            texts = named["lines"]
             points.append(PointStruct(
                 id=point_id(person["id"]),
-                vector={"lines": line_vecs, "grouped": grouped_vecs},
+                vector=named_vecs,
                 payload={
                     "person_id": person["id"],
                     "name": person["name"],
@@ -125,7 +142,6 @@ def main() -> None:
                     "profile_hash": profile_hash(person),
                 },
             ))
-            start += len(texts) + len(grouped)
         client.upsert(collection_name=name, points=points)
 
     removed = sorted(set(stored) - {p["id"] for p in people})

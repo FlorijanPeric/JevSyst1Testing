@@ -6,6 +6,7 @@
 #   ./run.sh load                embed new/changed colleagues from data/colleagues.csv (only those)
 #   ./run.sh load --force        re-embed everyone
 #   ./run.sh forget              clear remembered routing decisions
+#   ./run.sh fix "email" jan     correct a decision: this (and very similar) email goes to jan
 #   ./run.sh test                check accuracy on data/test_emails.csv
 #   ./run.sh rank [file.csv]     rank emails worst-first, export the worst to Postman
 #                                (default: data/my_inputs.csv = every email you typed)
@@ -21,6 +22,9 @@ case "${1:-}" in
     ;;
   forget)
     python route_email.py --forget
+    ;;
+  fix)
+    python route_email.py --fix "$3" "$2"
     ;;
   test)
     shift

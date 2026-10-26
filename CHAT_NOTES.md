@@ -83,8 +83,26 @@ Experiment `experiments/conf_experiment.py` (run from the project folder) on the
 - Scoring by `grouped` chunking: JevTry points now have two named multivectors, `grouped` (duties block + examples block, averaged = the score) and `lines` (for the descriptions).
 - Fast path 0.50 / 0.07 (was 0.65 / 0.10): 23% of emails skip system one at 98% accuracy.
 - Test on 106: 94/106, manual 6/6 (was 2/6), fast path 14/14 correct.
-- Server 125 still runs the old code, on purpose.
+- Later the same day: ranking switched to `window3` (best with system one in run 2, 85.1% CV); the fast path stays on `grouped` scores (98% correct at 0.50/0.07, while window3 was only ~95%). JevTry now has three named vectors: window, grouped, lines.
+- `grouped` version on 125: handwritten 94/106 (log `tests_grouped.log`). `window3` version: running on 125, `~/RagAdd/tests_window.log` (run with `./run_tests.sh`).
+- Run long jobs on 125, not on this PC.
+- Qdrant now also runs on 125 in docker (container `qdrant`, 127.0.0.1:6333, data in ~/qdrant_storage, restarts automatically). Scripts on 125 use it via `export QDRANT_URL=http://localhost:6333 QDRANT_API_KEY=`. From this PC: `ssh -N -L 6333:localhost:6333 125` and set the same two variables.
+- New: `./run.sh fix "email" jan` (corrections go into the routing cache; `manual_triage` = nobody), `--tiebreak` (yes/no question when the top two are close, margin 0.15), `experiments/flag_labels.py` (writes `experiments/data/label_review.csv`, most doubtful first, with an empty `correct_label` column).
+- Queued on 125: `run_compare.sh` (ranking x spam, log `compare.log`), then `run_next.sh` (local Qdrant, tie-break tests, label flags, log `next.log`).
 - Git: https://github.com/FlorijanPeric/JevSyst1Testing (`data/colleagues.csv` and `.env` are not in git).
+
+## Results 2026-10-26 (all on 125)
+| variant | generated 330 | handwritten 106 |
+|---|---|---|
+| window ranking | 273 (83%) | 93 |
+| grouped ranking | 271 (82%) | 94 |
+| + spam filter at 0.8 | 217-221 (66-67%) | 90-92 |
+| + tie-break | 210 (64%) | 88 |
+- window vs grouped: a tie in the real code. Kept window (default).
+- Spam at 0.8 blocked 78/400 real requests, so the threshold is now 0.95 (blocks 3/400, catches 7/36 junk).
+- Tie-break makes things worse: it stays off.
+- Local Qdrant on 125: same results, about 3x faster (251 s vs 714 s for 330 emails).
+- `flag_labels.py` is unreliable: it flags obviously correct labels (e.g. a staging 500 error labeled tilen got 0.01). Don't use its list as is.
 
 ## Gotchas we hit
 - Scripts read `.env`, not `.env.example`.
