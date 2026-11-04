@@ -15,3 +15,6 @@ data/worst_queries.csv
 data/inbox_sorted.csv
 postman/
 experiments/run*.log
+.env.local
+data/decisions.jsonl
+data/real_labels.csv

@@ -7,6 +7,8 @@
 #   ./run.sh load --force        re-embed everyone
 #   ./run.sh forget              clear remembered routing decisions
 #   ./run.sh fix "email" jan     correct a decision: this (and very similar) email goes to jan
+#   ./run.sh ok "email"          confirm the last decision for this email was right
+#   ./run.sh summary [--days 7]  overview of logged decisions (who got what, paths, spam, corrections)
 #   ./run.sh test                check accuracy on data/test_emails.csv
 #   ./run.sh rank [file.csv]     rank emails worst-first, export the worst to Postman
 #                                (default: data/my_inputs.csv = every email you typed)
@@ -25,6 +27,13 @@ case "${1:-}" in
     ;;
   fix)
     python route_email.py --fix "$3" "$2"
+    ;;
+  ok)
+    python route_email.py --ok "$2"
+    ;;
+  summary)
+    shift
+    python summary.py "$@"
     ;;
   test)
     shift

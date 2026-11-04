@@ -21,7 +21,7 @@ from qdrant_client import QdrantClient
 
 import config
 from clients import classify, embed_texts
-from route_email import MANUAL, add_routing_args, fast_pick, pick_recipient, recipient_question, shortlist
+from route_email import MANUAL, is_nobody, add_routing_args, fast_pick, pick_recipient, recipient_question, shortlist
 
 POSTMAN_DIR = Path("postman")
 SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -32,6 +32,7 @@ def badness(people: list[dict], probs: dict, final: str, expected: str | None) -
     margin = people[0]["score"] - people[1]["score"] if len(people) > 1 else 1.0
     llm_pick = max(probs, key=probs.get) if probs else MANUAL
     search_pick = people[0]["person_id"] if people else MANUAL
+    search_pick = MANUAL if is_nobody(search_pick) else search_pick
     p_final = probs.get(final, 0.0)
 
     parts = {
@@ -128,7 +129,7 @@ def main() -> None:
 
     ranked = []
     for i, (row, vector) in enumerate(zip(rows, vectors), 1):
-        people = shortlist(client, vector, args.candidates, args.ranking)
+        people = shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
         # Always ask system one, even when the fast path would skip it, so every email gets the same signals.
         answer = classify(row["email"], {"recipient": recipient_question(people)}, raw=True)["recipient"]
         probs = answer["probabilities"]

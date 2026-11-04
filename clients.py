@@ -32,12 +32,26 @@ def _embed_batch(texts: list[str]) -> list[list[float]]:
             time.sleep(config.EMBEDDING_API_BACKOFF_SEC * (attempt + 1))
 
 
+def _embed_batch_openai(texts: list[str], model: str) -> list[list[float]]:
+    resp = _openai_client.embeddings.create(model=model, input=texts)
+    return [item.embedding for item in resp.data]
+
+
+def _embed_with_fallback(texts: list[str]) -> list[list[float]]:
+    try:
+        return _embed_batch(texts)
+    except requests.RequestException as e:
+        if not config.EMBEDDING_FALLBACK_MODEL:
+            raise
+        print(f"[fallback] embedding endpoint failed ({str(e)[:80]}); using /v1/embeddings {config.EMBEDDING_FALLBACK_MODEL}")
+        return _embed_batch_openai(texts, config.EMBEDDING_FALLBACK_MODEL)
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
     if not config.EMBEDDING_API_URL:
-        resp = _openai_client.embeddings.create(model=config.EMBEDDING_MODEL, input=texts)
-        return [item.embedding for item in resp.data]
+        return _embed_batch_openai(texts, config.EMBEDDING_MODEL)
     size = config.EMBEDDING_BATCH_SIZE
-    return [vec for i in range(0, len(texts), size) for vec in _embed_batch(texts[i : i + size])]
+    return [vec for i in range(0, len(texts), size) for vec in _embed_with_fallback(texts[i : i + size])]
 
 
 def chat_complete(system_prompt: str, user_prompt: str) -> str:
@@ -61,20 +75,41 @@ def classify(state: str, questions: dict, model: str | None = None, raw: bool = 
     index (0 = first label, len-1 = last). raw=True returns the full answer
     objects instead (with "probabilities", "confidence", ...).
     """
+    models = [model] if model else config.SYSTEMONE_MODELS
+    errors = []
+    for m in models:
+        if _benched.get(m, 0) > time.time():
+            continue
+        try:
+            answers = _classify_once(state, questions, m)
+            break
+        except requests.RequestException as e:
+            errors.append(f"{m}: {str(e)[:80]}")
+            _benched[m] = time.time() + 600  # skip this model for 10 minutes
+            if len(models) > 1:
+                print(f"[fallback] system one model {m} failed, trying the next one")
+    else:
+        raise SystemOneDown("; ".join(errors) or "all system one models are benched")
+    if raw:
+        return answers
+    return {qid: ans.get(ans.get("type")) for qid, ans in answers.items()}
+
+
+class SystemOneDown(RuntimeError):
+    """No system one model answered; callers can fall back to search-only routing."""
+
+
+_benched: dict[str, float] = {}
+
+
+def _classify_once(state: str, questions: dict, model: str) -> dict:
     url = f"{config.HIVECORE_BASE_URL}/systemone"
-    payload = {
-        "model": model or config.CHAT_MODEL,
-        "state": state,
-        "questions": questions,
-    }
+    payload = {"model": model, "state": state, "questions": questions}
     for attempt in range(4):
-        resp = _session.post(url, json=payload, timeout=60)
+        resp = _session.post(url, json=payload, timeout=config.SYSTEMONE_TIMEOUT)
         # hivecore rate-limits (429) and occasionally has no free worker (503/504); back off and retry
         if resp.status_code not in (429, 503, 504) or attempt == 3:
             break
         time.sleep(2 * (attempt + 1))
     resp.raise_for_status()
-    answers = resp.json().get("answers", {})
-    if raw:
-        return answers
-    return {qid: ans.get(ans.get("type")) for qid, ans in answers.items()}
+    return resp.json().get("answers", {})

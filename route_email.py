@@ -1,5 +1,6 @@
 import argparse
 import csv
+import hashlib
 import json
 import time
 from datetime import datetime
@@ -11,10 +12,15 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
 
 import config
-from clients import classify, embed_texts
+from clients import SystemOneDown, classify, embed_texts
 from ingest import ensure_collection
 
 MANUAL = "manual_triage"
+
+
+def is_nobody(person_id: str | None) -> bool:
+    """manual_triage, or one of the "nobody" profiles in data/colleagues.csv (manual_spam, manual_personal, ...)."""
+    return person_id == MANUAL or (person_id or "").startswith("manual_")
 
 
 class Timer:
@@ -32,7 +38,8 @@ class Timer:
         return sum(self.stages.values())
 
 
-def shortlist(client: QdrantClient, vector: list[float], candidates: int, ranking: str = "window") -> list[dict]:
+def shortlist(client: QdrantClient, vector: list[float], candidates: int, ranking: str = "window",
+              nobody: str = "ranked") -> list[dict]:
     """Score every colleague locally and return the best `candidates`, ranked by "score".
 
     score         = average similarity to the person's "window" vectors (3-line windows); ranks
@@ -50,14 +57,25 @@ def shortlist(client: QdrantClient, vector: list[float], candidates: int, rankin
         return vecs @ query / np.linalg.norm(vecs, axis=1)
 
     # Small download for everyone, line vectors only for the winners.
-    points, _ = client.scroll(config.COLLEAGUES_COLLECTION, limit=10_000, with_payload=False,
+    points, _ = client.scroll(config.COLLEAGUES_COLLECTION, limit=10_000, with_payload=["person_id"],
                               with_vectors=["window", "grouped"])
     grouped = {point.id: float(sims(point.vector["grouped"]).mean()) for point in points}
     scores = grouped if ranking == "grouped" else {point.id: float(sims(point.vector["window"]).mean()) for point in points}
     by_grouped = sorted(grouped, key=grouped.get, reverse=True)
-    top = sorted(scores, key=scores.get, reverse=True)[:candidates]
+    nobody_ids = {point.id for point in points if is_nobody(point.payload["person_id"])}
+    ranked = sorted(scores, key=scores.get, reverse=True)
+    real = [pid for pid in ranked if pid not in nobody_ids]
+    if nobody == "always":
+        # every nobody profile as an extra option (tested 2026-10-26: fewer search misses, but 10 fewer correct)
+        top = real[:candidates] + [pid for pid in ranked if pid in nobody_ids]
+    else:
+        # "ranked": the top `candidates` overall (nobody profiles only if they rank there), topped up with
+        # real people so a nobody profile never pushes the right person out
+        top = ranked[:candidates]
+        top += real[len([pid for pid in top if pid not in nobody_ids]):candidates]
     if by_grouped[0] not in top:  # the fast-path pick must be in the list it is picked from
         top.append(by_grouped[0])
+    top.sort(key=lambda pid: -scores[pid])
     details = {point.id: point for point in client.retrieve(config.COLLEAGUES_COLLECTION, ids=top,
                                                              with_payload=True, with_vectors=["lines"])}
     people = []
@@ -89,7 +107,7 @@ def fast_pick(people: list[dict], min_score: float, min_margin: float) -> str | 
         return None
     best = max(people, key=lambda p: p["grouped_score"])
     if best["grouped_score"] >= min_score and best["grouped_margin"] >= min_margin:
-        return best["person_id"]
+        return MANUAL if is_nobody(best["person_id"]) else best["person_id"]
     return None
 
 
@@ -127,7 +145,7 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args) -
         "confidence": recipient.get("confidence"),
         "final_pick_prob": probs.get(choice),
     }
-    if getattr(args, "tiebreak", False) and choice != MANUAL:
+    if getattr(args, "tiebreak", False) and not is_nobody(choice):
         choice, verdict["tiebreak"] = tiebreak(email_text, people, probs, args, choice)
     return choice, answers, verdict
 
@@ -138,7 +156,7 @@ def tiebreak(email_text: str, people: list[dict], probs: dict, args, choice: str
     A 6-way choice spreads system one's attention; "A rather than B?" is easier for a small model.
     """
     ranked = sorted(combined_scores(probs, people, args).items(), key=lambda kv: -kv[1])
-    if len(ranked) < 2 or ranked[0][1] - ranked[1][1] >= args.tiebreak_margin or MANUAL in (ranked[0][0], ranked[1][0]):
+    if len(ranked) < 2 or ranked[0][1] - ranked[1][1] >= args.tiebreak_margin or is_nobody(ranked[0][0]) or is_nobody(ranked[1][0]):
         return choice, None
     by_id = {p["person_id"]: p for p in people}
     a, b = by_id[ranked[0][0]], by_id[ranked[1][0]]
@@ -156,10 +174,13 @@ def combined_scores(probs: dict, people: list[dict], args) -> dict:
 
 
 def pick_recipient(probs: dict, people: list[dict], args) -> str:
-    if not people or probs.get(MANUAL, 0) >= args.manual_threshold:
+    # "Nobody" is spread over several described options (spam, personal, wrong recipient + generic); add them up.
+    nobody = sum(v for k, v in probs.items() if is_nobody(k))
+    if not people or nobody >= args.manual_threshold:
         return MANUAL
     combined = combined_scores(probs, people, args)
-    return max(combined, key=combined.get)
+    best = max(combined, key=combined.get)
+    return MANUAL if is_nobody(best) else best
 
 
 def format_answer(question: dict, value) -> str:
@@ -190,10 +211,13 @@ def fix(client: QdrantClient, email_text: str, person_id: str) -> str:
     """Store a correction in the routing cache, so this and very similar emails go to person_id."""
     points, _ = client.scroll(config.COLLEAGUES_COLLECTION, limit=10_000, with_payload=True, with_vectors=False)
     people = {p.payload["person_id"]: p.payload for p in points}
+    people[MANUAL] = {"person_id": MANUAL, "name": "Manual triage", "email": "", "role": "nobody"}
     if person_id not in people:
         return f"Unknown person '{person_id}'. Known: {', '.join(sorted(people))}"
     remember(client, email_text, embed_texts([email_text])[0], people[person_id])
-    return f"Saved: emails like this now go to {people[person_id]['name']} ({person_id})."
+    save_label(email_text, MANUAL if is_nobody(person_id) else person_id, "corrected")
+    return (f"Saved: emails like this now go to {people[person_id]['name']} ({person_id}). "
+            f"Also added to {config.REAL_LABELS}.")
 
 
 def route(client: QdrantClient, email_text: str, args, smart: bool = True, questions: dict | None = None) -> dict:
@@ -216,28 +240,38 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
             if is_spam(answers, args):
                 return {"path": "spam", "person": None, "score": None, "people": [],
                         "answers": answers, "verdict": {}, "timer": timer}
-            person = None if hit.payload.get("person_id") == MANUAL else hit.payload  # a correction to "nobody"
+            person = None if is_nobody(hit.payload.get("person_id")) else hit.payload  # a correction to "nobody"
             return {"path": "cache", "person": person, "score": hit.score, "people": [],
                     "answers": answers, "verdict": {}, "timer": timer}
 
-    people = shortlist(client, vector, args.candidates, args.ranking)
+    people = shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
     timer.mark("search")
 
     fast = fast_pick(people, args.min_score, args.min_margin) if smart else None
     if fast:
         path, choice, verdict = "fast", fast, {}
-        answers = classify(email_text, questions) if questions else {}
+        try:
+            answers = classify(email_text, questions) if questions else {}
+        except SystemOneDown:
+            answers = {}
         timer.mark("questions")
     else:
         path = "llm"
-        choice, answers, verdict = ask_system_one(email_text, people, questions, args)
+        try:
+            choice, answers, verdict = ask_system_one(email_text, people, questions, args)
+        except SystemOneDown as e:
+            # Fallback: best search match (nobody profile -> manual), clearly marked in output and log.
+            path, answers = "search-only", {}
+            best = people[0]["person_id"] if people else MANUAL
+            choice = MANUAL if is_nobody(best) else best
+            verdict = {"fallback": f"system one down: {str(e)[:120]}"}
         timer.mark("llm")
 
     if is_spam(answers, args):
         path, choice = "spam", MANUAL
 
     # data/colleagues.csv has a "manual_triage" profile (spam, off-topic) so search can spot those too
-    person = None if choice == MANUAL else next((p for p in people if p["person_id"] == choice), None)
+    person = None if is_nobody(choice) else next((p for p in people if p["person_id"] == choice), None)
     if smart and args.learn and person:
         remember(client, email_text, vector, person)
         timer.mark("remember")
@@ -258,7 +292,8 @@ def describe(result: dict) -> str:
     return f"{person['name']} <{person['email']}>" if person else "manual triage"
 
 
-PATH_LABELS = {"cache": "similar past email", "fast": "clear match", "llm": "system one", "spam": "spam filter"}
+PATH_LABELS = {"cache": "similar past email", "fast": "clear match", "llm": "system one", "spam": "spam filter",
+               "search-only": "search only (system one was down)"}
 
 
 INPUTS_LOG = Path("data/my_inputs.csv")
@@ -295,6 +330,8 @@ def describe_confidence(result: dict) -> str:
     verdict = result["verdict"]
     if not verdict:
         return "- (system one was not needed)"
+    if "fallback" in verdict:
+        return f"- ({verdict['fallback']})"
     final = (result["person"] or {}).get("person_id", MANUAL)
     text = f"{verdict['confidence']:.0%} (system one picked {verdict['system_one_choice']})"
     if verdict["system_one_choice"] != final:
@@ -302,9 +339,63 @@ def describe_confidence(result: dict) -> str:
     return text
 
 
+def email_id(email_text: str) -> str:
+    return hashlib.sha256(" ".join(email_text.split()).encode("utf-8")).hexdigest()[:16]
+
+
+def log_decision(email_text: str, result: dict, source: str = "cli") -> None:
+    """Append one JSON line per routed email: the audit trail behind `./run.sh summary`."""
+    final = "spam" if result["path"] == "spam" else (result["person"] or {}).get("person_id", MANUAL)
+    entry = {
+        "time": datetime.now().isoformat(timespec="seconds"),
+        "id": email_id(email_text),
+        "source": source,
+        "email": email_text,
+        "final": final,
+        "path": result["path"],
+        "search_score": result["score"],
+        "candidates": [{"id": p["person_id"], "score": round(p["score"], 4)} for p in result["people"]],
+        "verdict": result["verdict"],
+        "answers": result["answers"],
+        "model": config.CHAT_MODEL,
+        "ms": round(result["timer"].total),
+    }
+    path = Path(config.DECISIONS_LOG)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+
+
+def save_label(email_text: str, expected: str, source: str) -> None:
+    """Real labeled data (expected,email) from corrections and confirmations; test it with ./run.sh test FILE."""
+    path = Path(config.REAL_LABELS)
+    new = not path.exists()
+    with path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        if new:
+            writer.writerow(["expected", "email", "source", "time"])
+        writer.writerow([expected, email_text, source, datetime.now().isoformat(timespec="seconds")])
+
+
+def confirm(email_text: str) -> str:
+    """Mark the last logged decision for this email as right."""
+    path, wanted, last = Path(config.DECISIONS_LOG), email_id(email_text), None
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            entry = json.loads(line)
+            if entry["id"] == wanted:
+                last = entry
+    if last is None:
+        return "No logged decision for this email. Route it first, or use fix to give the right person."
+    expected = MANUAL if last["final"] == "spam" or is_nobody(last["final"]) else last["final"]
+    save_label(email_text, expected, "confirmed")
+    return f"Confirmed: {expected} was right. Saved to {config.REAL_LABELS}."
+
+
 def run_single(client: QdrantClient, email_text: str, args, questions: dict) -> None:
     result = route(client, email_text, args, questions=questions)
     save_input(email_text, result)
+    log_decision(email_text, result)
     person = result["person"]
     preview = " ".join(email_text.split())
 
@@ -355,6 +446,8 @@ def add_routing_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--manual-threshold", type=float, default=0.7, help="System one must be this sure to pick manual triage")
     parser.add_argument("--ranking", choices=["window", "grouped"], default="window",
                         help="Which vectors rank the candidates for system one (the fast path always uses grouped)")
+    parser.add_argument("--nobody-candidates", choices=["ranked", "always"], default="ranked",
+                        help="Nobody profiles as candidates only when they rank in the top N (topped up with real people), or always")
     parser.add_argument("--tiebreak", action="store_true",
                         help="When the top two candidates are close, ask system one a yes/no question about just those two")
     parser.add_argument("--tiebreak-margin", type=float, default=0.15, help="How close counts as close (combined score)")
@@ -371,11 +464,19 @@ def main() -> None:
     parser.add_argument("--benchmark", metavar="FILE", help="File with one email per line; compare smart vs always-LLM")
     parser.add_argument("--forget", action="store_true", help="Delete all cached routing decisions and exit")
     parser.add_argument("--fix", metavar="PERSON_ID", help="Save the right recipient for this email; similar emails will follow it")
+    parser.add_argument("--ok", action="store_true", help="Confirm the last decision for this email was right (adds a real label)")
     parser.add_argument("--questions", default="data/questions.json", help="Extra system-one questions to ask per email")
     parser.add_argument("--details", action="store_true", help="Also show match scores and timings")
     args = parser.parse_args()
 
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
+
+    if args.ok:
+        if not args.email:
+            parser.error("--ok needs the email text (or file) too")
+        path = Path(args.email)
+        print(confirm(path.read_text(encoding="utf-8") if path.is_file() else args.email))
+        return
 
     if args.fix:
         if not args.email:

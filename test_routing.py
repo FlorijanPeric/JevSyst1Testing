@@ -41,7 +41,7 @@ def main() -> None:
 
     results = []
     for i, (test, vector) in enumerate(zip(tests, vectors), 1):
-        people = shortlist(client, vector, args.candidates, args.ranking)
+        people = shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
         fast = fast_pick(people, args.min_score, args.min_margin)
         if fast:
             path, got, conf = "fast", fast, None

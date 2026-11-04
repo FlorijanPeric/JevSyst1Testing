@@ -104,6 +104,14 @@ Experiment `experiments/conf_experiment.py` (run from the project folder) on the
 - Local Qdrant on 125: same results, about 3x faster (251 s vs 714 s for 330 emails).
 - `flag_labels.py` is unreliable: it flags obviously correct labels (e.g. a staging 500 error labeled tilen got 0.01). Don't use its list as is.
 
+## Round 2026-10-26 (not committed yet, running on 125: `round.log`)
+- Embeddings and system one stay on hivecore; only Qdrant runs locally on 125. `.env.local` on 125 (gitignored) sets QDRANT_URL=http://localhost:6333, so nothing needs exporting there.
+- Fallbacks: embeddings fall back to hivecore /v1/embeddings `bge-m3:latest` (identical vectors, cosine 1.0). System one: optional `SYSTEMONE_FALLBACK_MODELS`; other names currently have no worker, so when system one is down routing uses search only (path `search-only`, logged).
+- Candidates: 5 real people + all "nobody" profiles (before, nobody profiles took real people's places).
+- Audit log `data/decisions.jsonl` (one line per routed email); `./run.sh summary [--days N]`.
+- Real labels `data/real_labels.csv` from `./run.sh ok "email"` (confirm) and `./run.sh fix "email" person` (correct). Test with `./run.sh test data/real_labels.csv`.
+- Last results to compare with: handwritten 94, generated 282, search misses 1 / 11, nobody 5/6 and 22/30.
+
 ## Gotchas we hit
 - Scripts read `.env`, not `.env.example`.
 - A collection's vector size must match the embedding model's output (1024). The one first made in the UI was 1536, so it was deleted and recreated.
