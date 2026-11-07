@@ -117,6 +117,18 @@ def memory_pick(neighbors: list[tuple[str, float, str]], min_sim: float, min_sup
     return best if votes[best] >= min_share else None
 
 
+def memory_hints(neighbors: list[tuple[str, float, str, str]], min_sim: float, per_person: int = 1) -> dict:
+    """Past emails you corrected or confirmed, to show system one as examples: (person_id, similarity, source,
+    text) -> {person_id: [text, ...]}, most similar first. Lower bar than voting: system one still decides,
+    so a correction that is too far away to vote (e.g. 0.63) can still help it."""
+    hints: dict[str, list[str]] = {}
+    for pid, sim, source, text in sorted(neighbors, key=lambda n: -n[1]):
+        key = MANUAL if is_nobody(pid) else pid
+        if sim >= min_sim and source in ("corrected", "confirmed") and text and len(hints.get(key, [])) < per_person:
+            hints.setdefault(key, []).append(text)
+    return hints
+
+
 def should_learn(path: str, verdict: dict, choice: str) -> bool:
     """Which automatic decisions become memory: only ones two independent signals agree on.
 

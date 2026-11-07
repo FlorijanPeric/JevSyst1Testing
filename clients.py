@@ -128,7 +128,7 @@ def classify(state: str, questions: dict, model: str | None = None, raw: bool = 
     for m in models:
         if _benched.get(m, 0) > time.time():
             continue
-        key = _cache.key("s1", m, state, questions) if _cache is not None else None
+        key = _cache.key("s1", m, state, questions) if _cache is not None and config.CACHE_SYSTEMONE else None
         cached = _cache.get(key) if key else None
         if cached is not None:
             answers = cached

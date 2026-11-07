@@ -21,3 +21,6 @@ data/real_labels.csv
 data/learned_examples.csv
 data/cache.sqlite
 data/colleagues.*.csv
+final/
+round*/
+*.log

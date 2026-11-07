@@ -41,6 +41,10 @@ def add_routing_args(parser: argparse.ArgumentParser, settings: SimpleNamespace 
     parser.add_argument("--memory-min-support", type=float, default=s.memory_min_support)
     parser.add_argument("--memory-min-share", type=float, default=s.memory_min_share)
     parser.add_argument("--memory-weight", type=float, default=s.memory_weight)
+    parser.add_argument("--memory-hints", action=argparse.BooleanOptionalAction, default=s.memory_hints,
+                        help="Show system one similar corrected emails as examples")
+    parser.add_argument("--memory-hint-min-sim", type=float, default=s.memory_hint_min_sim)
+    parser.add_argument("--memory-hints-per-person", type=int, default=s.memory_hints_per_person)
     parser.add_argument("--auto-learn", action=argparse.BooleanOptionalAction, default=s.auto_learn,
                         help="Remember decisions that two signals agreed on")
     parser.add_argument("--workers", type=int, default=s.workers, help="Parallel emails in batch runs")

@@ -87,6 +87,10 @@ def main() -> None:
               + ", ".join(f"{p} {n}" for p, n in paths.most_common()), flush=True)
     total_ok = sum(r["ok"] for r in results)
     print(f"total {total_ok}/{len(results)} ({total_ok / len(results):.1%}) in {time.perf_counter() - start:.0f}s")
+    mem = [r for r in results if r["path"] in ("memory", "cache")]
+    last = results[-100:]
+    print(f"memory decisions: {sum(r['ok'] for r in mem)}/{len(mem)} right")
+    print(f"last 100 emails: {sum(r['path'] != 'llm' for r in last)}/{len(last)} without system one")
     points = client.count(config.ROUTED_COLLECTION).count if client.collection_exists(config.ROUTED_COLLECTION) else 0
     print(f"memory holds {points} emails at the end")
 

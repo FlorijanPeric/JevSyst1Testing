@@ -22,6 +22,9 @@ memory_min_sim = 0.70        # a past email must be at least this similar to vot
 memory_min_support = 1.0     # ... with summed trust this high (one correction, or two automatic decisions) ...
 memory_min_share = 0.75      # ... with the winner holding this share of the vote to skip system one
 memory_weight = 0.5          # otherwise the vote share is added to system one's decision with this weight
+memory_hints = true          # show system one the most similar corrected/confirmed email per candidate ...
+memory_hint_min_sim = 0.55   # ... from this similarity on (lower than voting: system one still decides)
+memory_hints_per_person = 1
 auto_learn = true            # remember fast-path picks and system one picks the search did not overrule
 
 # Optional extras

@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import settings  # noqa: E402
 from decide import (MANUAL, clean_email, combined_scores, fast_pick, is_nobody, memory_pick,  # noqa: E402
-                    memory_votes, pick_recipient, select_candidates, should_learn, spam_overruled)
+                    memory_hints, memory_votes, pick_recipient, select_candidates, should_learn, spam_overruled)
 
 
 def person(pid, score, grouped=None, margin=-1.0):
@@ -167,6 +167,13 @@ def test_memory_prior_can_change_the_pick():
     assert combined_scores(probs, people, 5.0, {"tilen": 1.0}, 0.0) == combined_scores(probs, people, 5.0)
 
 
+def test_memory_hints_only_trusted_and_similar_enough():
+    n = [("tilen", 0.63, "corrected", "iPad app cuts off the menu"), ("jan", 0.9, "auto", "auto one"),
+         ("tilen", 0.60, "corrected", "older"), ("manual_spam", 0.7, "confirmed", "buy now"), ("ana", 0.4, "corrected", "far")]
+    assert memory_hints(n, 0.55, 1) == {"tilen": ["iPad app cuts off the menu"], MANUAL: ["buy now"]}
+    assert memory_hints(n, 0.55, 2)["tilen"] == ["iPad app cuts off the menu", "older"]
+
+
 def test_should_learn_only_agreed_decisions():
     assert should_learn("fast", {}, "jan")
     assert should_learn("llm", {"system_one_choice": "jan"}, "jan")
@@ -181,6 +188,7 @@ def test_routing_toml_has_every_setting():
     s = settings.load()
     for key in ("search_weight", "manual_threshold", "min_score", "min_margin", "spam_threshold", "spam_override_score", "candidates", "memory",
                 "memory_k", "memory_min_sim", "memory_min_support", "memory_min_share", "memory_weight", "auto_learn",
+                "memory_hints", "memory_hint_min_sim", "memory_hints_per_person",
                 "ranking", "nobody_candidates", "tiebreak", "cache_threshold", "clean_emails",
                 "fast_path_questions", "workers", "learned_examples_per_person"):
         assert hasattr(s, key), key

@@ -47,11 +47,17 @@ def recall(client: QdrantClient, vector: list[float], k: int) -> list:
     return client.query_points(collection_name=config.ROUTED_COLLECTION, query=vector, limit=max(k, 1)).points
 
 
-def recipient_question(people: list[dict]) -> dict:
+def recipient_question(people: list[dict], hints: dict | None = None) -> dict:
     # Name + role + the two best-matching lines. Shorter role-and-duties descriptions were tried
     # (2026-10-23): same accuracy, but they caught only half as many emails that belong to nobody.
-    criteria = {p["person_id"]: f"{p['name']}, {p['role']}. Handles: {'; '.join(p['matched'])}" for p in people}
-    criteria[MANUAL] = "None of these people fit; needs a human to triage"
+    # hints: similar past emails you corrected or confirmed (decide.memory_hints), shown as examples.
+    hints = hints or {}
+    quote = lambda texts: "; ".join(f'"{" ".join(t.split())[:200]}"' for t in texts)
+    criteria = {p["person_id"]: f"{p['name']}, {p['role']}. Handles: {'; '.join(p['matched'])}"
+                + (f". Similar past emails that went to them: {quote(hints[p['person_id']])}" if p["person_id"] in hints else "")
+                for p in people}
+    criteria[MANUAL] = "None of these people fit; needs a human to triage" + (
+        f". Similar past emails that went nowhere: {quote(hints[MANUAL])}" if MANUAL in hints else "")
     return {
         "type": "choice",
         "instructions": "Which colleague should this email be forwarded to?",
@@ -69,18 +75,18 @@ def pick_recipient(probs: dict, people: list[dict], args, prior: dict | None = N
 
 
 def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
-                   prior: dict | None = None) -> tuple[str, dict, dict]:
+                   prior: dict | None = None, hints: dict | None = None) -> tuple[str, dict, dict]:
     """Ask system one for the recipient (plus any extra questions) and pick one.
 
     Each candidate gets P(system one) + search_weight * (search score - best search score);
     "nobody" options are summed and win at manual_threshold (decide.py). prior: memory vote shares,
-    weighted by memory_weight.
+    weighted by memory_weight. hints: past corrected emails shown to system one as examples.
 
     Returns (final pick, answers to extra questions, verdict). The verdict holds
     system one's own pick, its confidence in that pick, and the probability it
     gave the final pick (lower when the search score overruled it).
     """
-    raw = classify(email_text, {"recipient": recipient_question(people), **questions}, raw=True)
+    raw = classify(email_text, {"recipient": recipient_question(people, hints), **questions}, raw=True)
     recipient = raw.pop("recipient", None) or {}
     probs = recipient.get("probabilities", {})
     answers = {qid: ans.get(ans.get("type")) for qid, ans in raw.items()}
@@ -92,6 +98,8 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
     }
     if prior:
         verdict["memory"] = {pid: round(share, 2) for pid, share in prior.items()}
+    if hints:
+        verdict["hints"] = sorted(hints)  # candidates shown a similar corrected email
     if getattr(args, "tiebreak", False) and not is_nobody(choice):
         choice, verdict["tiebreak"] = tiebreak(email_text, people, probs, args, choice)
     return choice, answers, verdict
@@ -188,7 +196,7 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
     vector = embed_texts([text])[0]
     timer.mark("embed")
 
-    neighbors = []
+    neighbors, hints = [], {}
     if smart:
         hits = recall(client, vector, args.memory_k if use_memory else 1)
         timer.mark("cache")
@@ -204,6 +212,9 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
                     "answers": answers, "verdict": {}, "timer": timer}
         if use_memory:
             neighbors = [(h.payload["person_id"], h.score, h.payload.get("source", "auto")) for h in hits]
+            if getattr(args, "memory_hints", False):
+                hints = decide.memory_hints([n + (h.payload.get("text", ""),) for n, h in zip(neighbors, hits)],
+                                            args.memory_hint_min_sim, args.memory_hints_per_person)
 
     people = shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
     timer.mark("search")
@@ -223,7 +234,7 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
     else:
         path = "llm"
         try:
-            choice, answers, verdict = ask_system_one(text, people, questions, args, prior)
+            choice, answers, verdict = ask_system_one(text, people, questions, args, prior, hints)
         except SystemOneDown as e:
             # Fallback: best search match (nobody profile -> manual), clearly marked in output and log.
             path, answers = "search-only", {}
