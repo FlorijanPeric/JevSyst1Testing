@@ -35,6 +35,14 @@ EMBEDDING_FALLBACK_MODEL = os.environ.get("EMBEDDING_FALLBACK_MODEL", "bge-m3:la
 # Audit trail and real labels (both gitignored; real emails)
 DECISIONS_LOG = os.environ.get("DECISIONS_LOG", "data/decisions.jsonl")
 REAL_LABELS = os.environ.get("REAL_LABELS", "data/real_labels.csv")
+# Corrections from `fix`, merged into the person's profile as example emails (gitignored; real emails)
+LEARNED_EXAMPLES = os.environ.get("LEARNED_EXAMPLES", "data/learned_examples.csv")
+# Tracked "nobody" profiles (spam, personal, wrong recipient), merged with data/colleagues.csv when loading
+NOBODY_PROFILES = os.environ.get("NOBODY_PROFILES", "data/nobody_profiles.csv")
+
+# Disk cache for embeddings and system-one answers (same text + same question = same answer).
+# Saves the slowest calls for repeats and makes test runs comparable. Empty = off.
+CACHE_DB = os.environ.get("CACHE_DB", "data/cache.sqlite")
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None

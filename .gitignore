@@ -18,3 +18,6 @@ experiments/run*.log
 .env.local
 data/decisions.jsonl
 data/real_labels.csv
+data/learned_examples.csv
+data/cache.sqlite
+data/colleagues.*.csv

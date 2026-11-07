@@ -1,9 +1,43 @@
+import hashlib
+import json
+import sqlite3
+import threading
 import time
+from pathlib import Path
 
 import requests
 from openai import OpenAI
 
 import config
+
+
+class _DiskCache:
+    """Small thread-safe sqlite cache: embeddings by (model, text), system-one answers by (model, text, questions)."""
+
+    def __init__(self, path: str):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(path, check_same_thread=False)
+        self._lock = threading.Lock()
+        with self._lock:
+            self._db.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
+            self._db.commit()
+
+    @staticmethod
+    def key(*parts) -> str:
+        return hashlib.sha256(json.dumps(parts, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    def get(self, key: str):
+        with self._lock:
+            row = self._db.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return None if row is None else json.loads(row[0])
+
+    def put(self, key: str, value) -> None:
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", (key, json.dumps(value)))
+            self._db.commit()
+
+
+_cache = _DiskCache(config.CACHE_DB) if config.CACHE_DB else None
 
 _openai_client = OpenAI(base_url=config.HIVECORE_BASE_URL, api_key=config.HIVECORE_API_KEY)
 
@@ -47,11 +81,25 @@ def _embed_with_fallback(texts: list[str]) -> list[list[float]]:
         return _embed_batch_openai(texts, config.EMBEDDING_FALLBACK_MODEL)
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
+def _embed_uncached(texts: list[str]) -> list[list[float]]:
     if not config.EMBEDDING_API_URL:
         return _embed_batch_openai(texts, config.EMBEDDING_MODEL)
     size = config.EMBEDDING_BATCH_SIZE
     return [vec for i in range(0, len(texts), size) for vec in _embed_with_fallback(texts[i : i + size])]
+
+
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Embeddings, from the disk cache where possible (repeats and reminders skip the slowest call)."""
+    if _cache is None:
+        return _embed_uncached(texts)
+    keys = [_cache.key("emb", config.EMBEDDING_MODEL, t) for t in texts]
+    found = {k: _cache.get(k) for k in set(keys)}
+    missing = sorted({(k, t) for k, t in zip(keys, texts) if found[k] is None})
+    if missing:
+        for (k, _), vec in zip(missing, _embed_uncached([t for _, t in missing])):
+            _cache.put(k, vec)
+            found[k] = vec
+    return [found[k] for k in keys]
 
 
 def chat_complete(system_prompt: str, user_prompt: str) -> str:
@@ -80,8 +128,15 @@ def classify(state: str, questions: dict, model: str | None = None, raw: bool = 
     for m in models:
         if _benched.get(m, 0) > time.time():
             continue
+        key = _cache.key("s1", m, state, questions) if _cache is not None else None
+        cached = _cache.get(key) if key else None
+        if cached is not None:
+            answers = cached
+            break
         try:
             answers = _classify_once(state, questions, m)
+            if key:
+                _cache.put(key, answers)
             break
         except requests.RequestException as e:
             errors.append(f"{m}: {str(e)[:80]}")

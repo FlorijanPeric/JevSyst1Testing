@@ -1,0 +1,36 @@
+# All routing settings in one place. Command-line options override these.
+# Each value notes the test it comes from. `./run.sh tune` can recompute the first four from real labels.
+
+# Decision
+search_weight = 5.0          # how much search score counts next to system one's probability
+manual_threshold = 0.7       # summed "nobody" probability needed for manual triage (0.6 cost 11 emails, 0.8 same as 0.7)
+min_score = 0.50             # fast path: best grouped score at least this ...
+min_margin = 0.07            # ... and this far ahead of #2; 98% correct, ~25% of emails skip system one
+spam_threshold = 0.95        # 0.8 wrongly blocked 78 of 400 real requests; 0.95 blocks 3
+spam_override_score = 0.55   # ... unless a real person's grouped score is this high (round 3: 2 real reports blocked)
+
+# Candidates shown to system one
+candidates = 5               # real people (top-up), plus nobody profiles only when they rank in the top 5
+ranking = "window"           # "window" or "grouped"; a tie in the real code (273 vs 271 of 330)
+nobody_candidates = "ranked" # "ranked" (281/330) or "always" (272-274/330)
+
+# Memory: learn from corrections (fix), confirmations (ok) and decisions two signals agreed on
+memory = true                # use similar past emails (off = round 3 behaviour)
+memory_k = 7                 # past emails looked at per new email
+memory_min_sim = 0.70        # a past email must be at least this similar to vote (round 5: 0.70 skipped
+                             # system one most often, 0.80 hardly ever fired)
+memory_min_support = 1.0     # ... with summed trust this high (one correction, or two automatic decisions) ...
+memory_min_share = 0.75      # ... with the winner holding this share of the vote to skip system one
+memory_weight = 0.5          # otherwise the vote share is added to system one's decision with this weight
+auto_learn = true            # remember fast-path picks and system one picks the search did not overrule
+
+# Optional extras
+tiebreak = false             # yes/no question between the top two when close; tested worse (-11 of 330)
+tiebreak_margin = 0.15
+cache_threshold = 0.95       # reuse a past or corrected decision for emails at least this similar
+
+# Efficiency
+clean_emails = true                # strip quoted replies, signatures and footers before routing
+fast_path_questions = ["spam"]     # questions still asked when the fast path skips system one
+workers = 3                        # parallel emails in test and inbox runs (hivecore rate-limits above ~4)
+learned_examples_per_person = 20   # newest corrections added to a profile by `fix`

@@ -128,3 +128,35 @@ Experiment `experiments/conf_experiment.py` (run from the project folder) on the
 3. Suggested replies using `query.py` and a knowledge base in `data/`.
 4. A `fix` command so corrections teach the cache.
 5. A small web page, reading text from attachments and PDFs, and a statistics dashboard.
+
+## Round 3, 2026-11-04 (13 improvements; not committed yet, running on 125: `round3.log`)
+- `routing.toml`: every setting in one place, with the reason behind each value; CLI options override it.
+- `decide.py`: pure decision logic (no network) + `tests/test_decide.py` (`./run.sh unit`) + GitHub Actions workflow.
+- `profiles.py`: profile vectors in memory; reloaded only when a stored profile_hash changes.
+- `service.py`: API on 127.0.0.1:8090 (`./run.sh serve`): /route, /fix, /ok, /summary, /health.
+- `data/nobody_profiles.csv` (tracked) is merged with `data/colleagues.csv` at load; the nobody rows were moved out of colleagues.csv.
+- Email cleaning (quoted replies, signatures, footers) before routing (`clean_emails`).
+- `fix` now also adds the email to the person's profile (`data/learned_examples.csv`, newest 20 per person) and re-embeds that person.
+- `tune.py` (`./run.sh tune [file] [--write]`): re-tunes search_weight / manual_threshold / fast path from labels, 2-fold CV.
+- Fast path asks only `fast_path_questions` (spam); the inbox still asks everything (needs urgency).
+- Test and inbox runs are parallel (`workers` = 3).
+- Disk cache `data/cache.sqlite` for embeddings and system-one answers (repeat runs identical and fast).
+- The benchmark in experiments/ still expects a single `manual_triage` profile; update it before rerunning.
+- Result: handwritten 95/106, generated 287/330 (round 2: 281), repeat run identical in 1 s, API 10-400 ms per clear match.
+
+## Rounds 4-8, 2026-11-04 to 2026-11-07: memory instead of hand edits
+- Round 4: editing Jernej/Aleksander/Sara profiles + a CEO hint in the question did not help (94/106, 287/330,
+  nobody 24 -> 19/30). Reverted. Rule from now on: no case-by-case fixes, only general mechanisms.
+- Spam override: spam does not block an email when a real person's grouped score >= `spam_override_score` (0.55).
+- Memory (`memory*` in routing.toml): each email looks at its 7 nearest past emails in the routed collection.
+  Corrections (`fix`) and confirmations (`ok`) count fully, automatic decisions half and only when two signals
+  agreed (fast path, or system one's pick not overruled by search). Clear agreement -> routed without system one;
+  otherwise the vote nudges system one's decision. `fix` no longer edits profiles.
+- `experiments/learn_curve.py`: emails arrive in random order, each scored before its label is known.
+  With corrections + confirmations: same accuracy (88.5%), but system one is skipped for 30% -> 56% of emails
+  over 436 emails; memory decisions 95-100% right.
+- `experiments/paraphrase_test.py`: fix each mistake once, then route reworded versions never seen before.
+  Rewordings by Qwen3-30B (round 6) and Gemma + GaMS for Slovenian (round 8): 22-23% -> 99% right at
+  memory_min_sim 0.70, control not hurt (90 -> 91%, 82 -> 83%). Below 0.70 unrelated emails vote and the
+  control drops, so 0.70 is the setting. memory_weight barely matters.
+- DeepSeek had no worker on hivecore on 2026-11-07 (round 7 stopped). Same token works for every hivecore model.

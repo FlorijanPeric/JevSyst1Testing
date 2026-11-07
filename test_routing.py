@@ -4,18 +4,22 @@ A file without an "expected" column (e.g. data/random_emails.csv) is just routed
 you get each decision plus how many emails each person received, to check by eye.
 
 Nothing is written to Qdrant: no cache lookups and no learning, so every run is comparable.
+Emails run in parallel (`workers` in routing.toml); system-one answers come from the disk cache
+when the exact same question was asked before, so repeated runs of a setup give the same result.
 """
 import argparse
 import csv
 import json
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from qdrant_client import QdrantClient
 
 import config
 from clients import classify, embed_texts
+from decide import clean_email, spam_overruled
 from route_email import MANUAL, add_routing_args, ask_system_one, fast_pick, shortlist
 
 
@@ -37,32 +41,42 @@ def main() -> None:
 
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
     start = time.perf_counter()
-    vectors = embed_texts([t["email"] for t in tests])
+    texts = [clean_email(t["email"]) if args.clean_emails else t["email"] for t in tests]
+    vectors = embed_texts(texts)
 
-    results = []
-    for i, (test, vector) in enumerate(zip(tests, vectors), 1):
+    def run_one(i: int) -> dict:
+        test, text, vector = tests[i], texts[i], vectors[i]
         people = shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
         fast = fast_pick(people, args.min_score, args.min_margin)
         if fast:
             path, got, conf = "fast", fast, None
-            answers = classify(test["email"], spam_q) if spam_q else {}
+            answers = classify(text, spam_q) if spam_q else {}
         else:
             path = "llm"
-            got, answers, verdict = ask_system_one(test["email"], people, spam_q, args)
+            got, answers, verdict = ask_system_one(text, people, spam_q, args)
             conf = verdict["confidence"]
+        overruled = False
         if (answers.get("spam") or 0) >= args.spam_threshold:
-            path, got = "spam", MANUAL
-        conf_text = "  -  " if conf is None else f"{conf:4.0%} "
-        preview = " ".join(test["email"].split())
-        if not labeled:
-            results.append({**test, "got": got, "path": path, "confidence": conf})
-            print(f"[{i:>3}/{len(tests)}] {path:<4} conf {conf_text} -> {got:<14} {preview[:80]}")
-            continue
-        in_shortlist = test["expected"] == MANUAL or any(p["person_id"] == test["expected"] for p in people)
-        ok = got == test["expected"]
-        results.append({**test, "got": got, "path": path, "ok": ok, "in_shortlist": in_shortlist, "confidence": conf})
-        print(f"[{i:>3}/{len(tests)}] {'ok  ' if ok else 'FAIL'} {path:<4} conf {conf_text} "
-              f"expected {test['expected']:<14} got {got:<14} {preview[:45]}")
+            overruled = spam_overruled(people, args.spam_override_score)
+            if not overruled:
+                path, got = "spam", MANUAL
+        row = {**test, "got": got, "path": path, "confidence": conf, "spam_overruled": overruled}
+        if labeled:
+            row["in_shortlist"] = test["expected"] == MANUAL or any(p["person_id"] == test["expected"] for p in people)
+            row["ok"] = got == test["expected"]
+        return row
+
+    results = []
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+        for i, row in enumerate(pool.map(run_one, range(len(tests))), 1):
+            results.append(row)
+            conf_text = "  -  " if row["confidence"] is None else f"{row['confidence']:4.0%} "
+            preview = " ".join(row["email"].split())
+            if labeled:
+                print(f"[{i:>3}/{len(tests)}] {'ok  ' if row['ok'] else 'FAIL'} {row['path']:<4} conf {conf_text} "
+                      f"expected {row['expected']:<14} got {row['got']:<14} {preview[:45]}", flush=True)
+            else:
+                print(f"[{i:>3}/{len(tests)}] {row['path']:<4} conf {conf_text} -> {row['got']:<14} {preview[:80]}", flush=True)
 
     if not labeled:
         print(f"\nRouted {len(results)} emails in {time.perf_counter() - start:.0f}s. Emails per person:")
@@ -81,6 +95,9 @@ def main() -> None:
         confs = [r["confidence"] for r in group if r["confidence"] is not None]
         if confs:
             print(f"  avg system one confidence when {label}: {sum(confs) / len(confs):.0%}")
+    overruled = [r for r in results if r["spam_overruled"]]
+    if overruled:
+        print(f"  spam overruled by a clear match: {sum(r['ok'] for r in overruled)}/{len(overruled)} correct")
     missed = [r for r in results if not r["in_shortlist"]]
     print(f"Search misses:   {len(missed)} (right person not in top {args.candidates}, system one never saw them)")
 

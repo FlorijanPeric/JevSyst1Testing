@@ -1,0 +1,155 @@
+"""Pure routing logic: no network, no Qdrant, no hivecore. Unit-tested in tests/test_decide.py."""
+import re
+
+MANUAL = "manual_triage"
+
+
+def is_nobody(person_id: str | None) -> bool:
+    """manual_triage, or one of the "nobody" profiles (manual_spam, manual_personal, manual_wrong, ...)."""
+    return person_id == MANUAL or (person_id or "").startswith("manual_")
+
+
+# ---------- email cleaning ----------
+
+_REPLY_HEADER = re.compile(
+    r"^\s*(On .{4,200} wrote:|Dne .{4,200} (je )?(napisal|napisala|pisal|pisala).{0,20}:"
+    r"|-{2,}\s*(Original Message|Forwarded message|Izvirno sporočilo|Posredovano sporočilo)\s*-{2,}"
+    r"|(From|Od): .*\S+@\S+.*)\s*$",  # only a header line with an address, not a sentence starting "From:"
+    re.IGNORECASE,
+)
+_SIGNATURE = re.compile(r"^\s*(--|__+|Sent from my \w+|Poslano z mojega \w+)\s*$", re.IGNORECASE)
+_FOOTER = re.compile(
+    r"(this (e-?mail|message) (and any attachments )?(is|are|may be) (confidential|intended)"
+    r"|to je (zaupno|zaupna)|unsubscribe|odjava od prejemanja)",
+    re.IGNORECASE,
+)
+
+
+def clean_email(text: str) -> str:
+    """Keep only the new part of an email: drop quoted replies, signatures and legal or newsletter footers.
+
+    Falls back to the original text if cleaning would leave almost nothing.
+    """
+    kept = []
+    for line in text.splitlines():
+        if _REPLY_HEADER.match(line) or _SIGNATURE.match(line):
+            break  # everything below is the previous email or the signature
+        if line.lstrip().startswith(">") or _FOOTER.search(line):
+            continue
+        kept.append(line)
+    cleaned = "\n".join(kept).strip()
+    return cleaned if len(cleaned) >= 15 else text.strip()
+
+
+# ---------- candidates ----------
+
+def select_candidates(scores: dict, nobody_ids: set, k: int, mode: str = "ranked",
+                      must_include: str | None = None) -> list:
+    """Ids shown to system one, best score first.
+
+    ranked: the top k overall (nobody profiles only if they rank there), topped up with real people so a
+            nobody profile never pushes the right person out (generated 281/330).
+    always: k real people plus every nobody profile (fewer search misses, but 272-274/330).
+    must_include: the fast-path pick, which has to be in the list it is picked from.
+    """
+    ranked = sorted(scores, key=scores.get, reverse=True)
+    real = [pid for pid in ranked if pid not in nobody_ids]
+    if mode == "always":
+        top = real[:k] + [pid for pid in ranked if pid in nobody_ids]
+    else:
+        top = ranked[:k]
+        top += real[sum(pid not in nobody_ids for pid in top):k]
+    if must_include is not None and must_include not in top:
+        top.append(must_include)
+    return sorted(top, key=lambda pid: -scores[pid])
+
+
+# ---------- decisions ----------
+
+def fast_pick(people: list[dict], min_score: float, min_margin: float) -> str | None:
+    """The person to forward to without asking system one, or None if the match isn't clear enough."""
+    if not people:
+        return None
+    best = max(people, key=lambda p: p["grouped_score"])
+    if best["grouped_score"] >= min_score and best["grouped_margin"] >= min_margin:
+        return MANUAL if is_nobody(best["person_id"]) else best["person_id"]
+    return None
+
+
+def spam_overruled(people: list[dict], override_score: float) -> bool:
+    """A real person matches this clearly, so a high spam probability is more likely a report about spam
+    (".exe invoice, is this safe?") or an odd but real request than spam itself."""
+    real = [p["grouped_score"] for p in people if not is_nobody(p["person_id"])]
+    return bool(real) and max(real) >= override_score
+
+
+# ---------- memory: past labeled emails (corrections, confirmations, trusted decisions) ----------
+
+TRUST = {"corrected": 1.0, "confirmed": 1.0, "auto": 0.5}
+
+
+def memory_votes(neighbors: list[tuple[str, float, str]], min_sim: float) -> dict:
+    """Weighted votes from the nearest past emails: (person_id, similarity, source) -> {person_id: share}.
+
+    Each neighbor at least min_sim similar votes with similarity * trust of its source; every nobody
+    label counts for MANUAL. Shares add up to 1 (empty when nothing is similar enough).
+    """
+    votes: dict[str, float] = {}
+    for pid, sim, source in neighbors:
+        if sim >= min_sim:
+            key = MANUAL if is_nobody(pid) else pid
+            votes[key] = votes.get(key, 0.0) + sim * TRUST.get(source, TRUST["auto"])
+    total = sum(votes.values())
+    return {pid: v / total for pid, v in votes.items()} if total else {}
+
+
+def memory_pick(neighbors: list[tuple[str, float, str]], min_sim: float, min_support: float,
+                min_share: float) -> str | None:
+    """The person to forward to from memory alone, or None.
+
+    Support is the summed trust of the similar past emails: one correction (1.0) or two automatic decisions
+    (0.5 each) reach 1.0. The winner must also hold at least min_share of the weighted vote."""
+    votes = memory_votes(neighbors, min_sim)
+    support = sum(TRUST.get(source, TRUST["auto"]) for _, sim, source in neighbors if sim >= min_sim)
+    if not votes or support < min_support:
+        return None
+    best = max(votes, key=votes.get)
+    return best if votes[best] >= min_share else None
+
+
+def should_learn(path: str, verdict: dict, choice: str) -> bool:
+    """Which automatic decisions become memory: only ones two independent signals agree on.
+
+    fast: the search match was clear. llm: system one's own pick is the final pick (search didn't overrule it).
+    Never spam, nobody, fallbacks or memory decisions (those would only repeat what memory already holds).
+    """
+    if is_nobody(choice):
+        return False
+    if path == "fast":
+        return True
+    return path == "llm" and verdict.get("system_one_choice") == choice
+
+
+# ---------- decisions ----------
+
+def combined_scores(probs: dict, people: list[dict], search_weight: float, prior: dict | None = None,
+                    prior_weight: float = 0.0) -> dict:
+    """System one's probability + search bonus + (optionally) the memory vote share."""
+    best_score = max(p["score"] for p in people)
+    prior = prior or {}
+    return {p["person_id"]: probs.get(p["person_id"], 0) + search_weight * (p["score"] - best_score)
+            + prior_weight * prior.get(p["person_id"], 0) for p in people}
+
+
+def pick_recipient(probs: dict, people: list[dict], search_weight: float, manual_threshold: float,
+                   prior: dict | None = None, prior_weight: float = 0.0) -> str:
+    """System one's probability plus a search bonus; "nobody" options are summed for the manual decision.
+
+    prior: memory vote shares; MANUAL's share counts towards the nobody sum."""
+    prior = prior or {}
+    nobody = sum(v for k, v in probs.items() if is_nobody(k)) + prior_weight * prior.get(MANUAL, 0)
+    if not people or nobody >= manual_threshold:
+        return MANUAL
+    combined = combined_scores(probs, people, search_weight, prior, prior_weight)
+    best = max(combined, key=combined.get)
+    return MANUAL if is_nobody(best) else best

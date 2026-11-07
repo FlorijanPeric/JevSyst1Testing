@@ -6,6 +6,7 @@ Output: printed list + data/inbox_sorted.csv. Nothing is learned into the routin
 import argparse
 import csv
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from qdrant_client import QdrantClient
@@ -21,7 +22,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, help="Only process the first N emails")
     add_routing_args(parser)
     args = parser.parse_args()
-    args.cache_threshold, args.learn = 0.95, False
+    args.learn = False
 
     questions = json.loads(Path(args.questions).read_text(encoding="utf-8"))
     if "urgency" not in questions:
@@ -32,11 +33,12 @@ def main() -> None:
     emails = emails[: args.limit] if args.limit else emails
 
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
-    rows = []
-    for i, email in enumerate(emails, 1):
-        result = route(client, email, args, questions=questions)
+
+    def process(email: str) -> dict:
+        # all questions even on the fast path: the inbox sorts by urgency
+        result = route(client, email, args, questions=questions, ask_all_questions=True)
         answers = result["answers"]
-        rows.append({
+        return {
             "urgency": answers.get("urgency") or 0.0,
             "spam": answers.get("spam") or 0.0,
             "language": answers.get("language") or "",
@@ -44,9 +46,14 @@ def main() -> None:
             "forward_to": describe(result),
             "email": email,
             "is_spam": result["path"] == "spam",
-        })
-        if i % 10 == 0 or i == len(emails):
-            print(f"  processed {i}/{len(emails)}", flush=True)
+        }
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+        for i, row in enumerate(pool.map(process, emails), 1):
+            rows.append(row)
+            if i % 10 == 0 or i == len(emails):
+                print(f"  processed {i}/{len(emails)}", flush=True)
 
     # Most urgent first; spam always at the bottom.
     rows.sort(key=lambda r: (r["is_spam"], -r["urgency"]))

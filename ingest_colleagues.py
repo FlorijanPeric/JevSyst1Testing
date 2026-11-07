@@ -15,7 +15,9 @@ from qdrant_client.models import (
 )
 
 import config
+import settings
 from clients import embed_texts
+from decide import is_nobody
 
 
 # Bump when the vector layout changes, so everyone gets re-embedded.
@@ -101,16 +103,46 @@ def ensure_collection_layout(client: QdrantClient, name: str, probe_text: str) -
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Embed colleague profiles into Qdrant for email routing.")
-    parser.add_argument("path", nargs="?", default="data/colleagues.csv", help="JSON or CSV file")
-    parser.add_argument("--force", action="store_true", help="Re-embed everyone, even if unchanged")
-    args = parser.parse_args()
+def merge_learned(people: list[dict], learned_path: Path, per_person: int) -> list[dict]:
+    """Add the newest corrections from `fix` to each person's example emails.
 
-    people = load_people(Path(args.path))
-    client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
+    Corrections to "nobody" go into a separate learned nobody profile (manual_learned).
+    """
+    if not learned_path.exists():
+        return people
+    with learned_path.open(encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    by_person: dict[str, list[str]] = {}
+    for row in rows:
+        pid = "manual_learned" if is_nobody(row["person_id"]) else row["person_id"]
+        by_person.setdefault(pid, []).append(row["email"].strip())
+    people = [dict(p) for p in people]
+    known = {p["id"] for p in people}
+    for p in people:
+        learned = by_person.get(p["id"], [])[-per_person:]
+        p["example_emails"] = p.get("example_emails", []) + [e for e in learned if e not in p.get("example_emails", [])]
+    if "manual_learned" in by_person and "manual_learned" not in known:
+        people.append({"id": "manual_learned", "name": "Nobody (learned from corrections)", "email": "",
+                       "role": "Not for anyone here: emails corrected to nobody",
+                       "responsibilities": [], "example_emails": by_person["manual_learned"][-per_person:]})
+    return people
+
+
+def build_people(path: Path, nobody_path: Path | None = None, learned_path: Path | None = None,
+                 per_person: int = 20) -> list[dict]:
+    """Colleagues + tracked nobody profiles + learned examples, as one list of profiles."""
+    people = load_people(path)
+    if nobody_path and nobody_path.exists() and nobody_path.resolve() != path.resolve():
+        ids = {p["id"] for p in people}
+        people += [p for p in load_people(nobody_path) if p["id"] not in ids]
+    if learned_path:
+        people = merge_learned(people, learned_path, per_person)
+    return people
+
+
+def sync_profiles(client: QdrantClient, people: list[dict], force: bool = False) -> str:
+    """Embed new or changed profiles, delete removed ones; unchanged ones cost nothing. Returns a summary line."""
     name = config.COLLEAGUES_COLLECTION
-
     ensure_collection_layout(client, name, profile_texts(people[0])[0])
 
     stored = {
@@ -118,7 +150,7 @@ def main() -> None:
         for p in client.scroll(name, limit=10_000, with_payload=["person_id", "profile_hash"])[0]
     }
 
-    changed = [p for p in people if args.force or stored.get(p["id"]) != profile_hash(p)]
+    changed = [p for p in people if force or stored.get(p["id"]) != profile_hash(p)]
     if changed:
         texts_per_person = [{"lines": profile_texts(p), "grouped": grouped_texts(p), "window": window_texts(p)}
                             for p in changed]
@@ -129,7 +161,6 @@ def main() -> None:
             for vector_name, texts in named.items():
                 named_vecs[vector_name] = vectors[start : start + len(texts)]
                 start += len(texts)
-            texts = named["lines"]
             points.append(PointStruct(
                 id=point_id(person["id"]),
                 vector=named_vecs,
@@ -138,7 +169,7 @@ def main() -> None:
                     "name": person["name"],
                     "email": person["email"],
                     "role": person["role"],
-                    "texts": texts,
+                    "texts": named["lines"],
                     "profile_hash": profile_hash(person),
                 },
             ))
@@ -148,10 +179,28 @@ def main() -> None:
     if removed:
         client.delete(collection_name=name, points_selector=[point_id(pid) for pid in removed])
 
-    print(f"{len(people)} colleagues: {len(changed)} embedded"
-          f"{' (' + ', '.join(p['name'] for p in changed) + ')' if changed else ''}, "
-          f"{len(people) - len(changed)} unchanged, {len(removed)} removed"
-          f"{' (' + ', '.join(removed) + ')' if removed else ''}.")
+    return (f"{len(people)} profiles: {len(changed)} embedded"
+            f"{' (' + ', '.join(p['name'] for p in changed) + ')' if changed else ''}, "
+            f"{len(people) - len(changed)} unchanged, {len(removed)} removed"
+            f"{' (' + ', '.join(removed) + ')' if removed else ''}.")
+
+
+def sync_default(client: QdrantClient, force: bool = False, path: str = "data/colleagues.csv") -> str:
+    """The standard profile set (colleagues + nobody profiles + learned examples), synced to Qdrant."""
+    s = settings.load()
+    people = build_people(Path(path), Path(config.NOBODY_PROFILES), Path(config.LEARNED_EXAMPLES),
+                          s.learned_examples_per_person)
+    return sync_profiles(client, people, force)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Embed colleague profiles into Qdrant for email routing.")
+    parser.add_argument("path", nargs="?", default="data/colleagues.csv", help="JSON or CSV file")
+    parser.add_argument("--force", action="store_true", help="Re-embed everyone, even if unchanged")
+    args = parser.parse_args()
+
+    client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
+    print(sync_default(client, args.force, args.path))
 
 
 if __name__ == "__main__":
