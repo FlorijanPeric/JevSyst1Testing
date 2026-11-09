@@ -12,7 +12,7 @@ from qdrant_client.models import PointStruct
 
 import config
 import decide
-from clients import SystemOneDown, classify, embed_texts
+from clients import SystemOneDown, ask_model_choice, classify, embed_emails, rerank
 from decide import MANUAL, clean_email, fast_pick, is_nobody  # noqa: F401 (re-exported for other scripts)
 from ingest import ensure_collection
 from profiles import get_store
@@ -38,6 +38,36 @@ def shortlist(client: QdrantClient, vector: list[float], candidates: int, rankin
               nobody: str = "ranked") -> list[dict]:
     """Candidates for one email, scored from profile vectors kept in memory (see profiles.py)."""
     return get_store(client).shortlist(vector, candidates, ranking, nobody)
+
+
+def profile_document(payload: dict) -> str:
+    """One person's profile as plain text for the reranker: name, role, duties and example emails."""
+    lines = [t.split(": ", 1)[-1] for t in payload.get("texts", []) if " handles emails like: " not in t]
+    examples = [t.split(" handles emails like: ", 1)[-1] for t in payload.get("texts", []) if " handles emails like: " in t]
+    text = f"{payload['name']}, {payload['role']}. Handles: " + "; ".join(lines)
+    if examples:
+        text += ". Example emails: " + " | ".join(examples)
+    return text[:2000]
+
+
+def candidates(client: QdrantClient, text: str, vector: list[float], args) -> list[dict]:
+    """The people system one chooses from. With rerank on, a bigger search pool (rerank_pool) is re-sorted
+    by the reranker on hivecore and the best `candidates` kept (decide.rerank_select)."""
+    if not getattr(args, "rerank", False):
+        return shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
+    pool = shortlist(client, vector, args.rerank_pool, args.ranking, args.nobody_candidates)
+    payloads = get_store(client).payloads()
+    real = [p for p in pool if not is_nobody(p["person_id"])]
+    try:
+        scores = rerank(text, [profile_document(payloads[p["person_id"]]) for p in real])
+    except Exception as e:  # reranker down: plain search shortlist
+        print(f"[fallback] reranker failed ({str(e)[:80]}); using the search shortlist")
+        return shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
+    by_id = {p["person_id"]: s for p, s in zip(real, scores)}
+    for p in pool:
+        if p["person_id"] in by_id:
+            p["rerank_score"] = by_id[p["person_id"]]
+    return decide.rerank_select(pool, by_id, args.candidates)
 
 
 def recall(client: QdrantClient, vector: list[float], k: int) -> list:
@@ -86,7 +116,8 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
     system one's own pick, its confidence in that pick, and the probability it
     gave the final pick (lower when the search score overruled it).
     """
-    raw = classify(email_text, {"recipient": recipient_question(people, hints), **questions}, raw=True)
+    question = recipient_question(people, hints)
+    raw = classify(email_text, {"recipient": question, **questions}, raw=True)
     recipient = raw.pop("recipient", None) or {}
     probs = recipient.get("probabilities", {})
     answers = {qid: ans.get(ans.get("type")) for qid, ans in raw.items()}
@@ -100,6 +131,17 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
         verdict["memory"] = {pid: round(share, 2) for pid, share in prior.items()}
     if hints:
         verdict["hints"] = sorted(hints)  # candidates shown a similar corrected email
+    mode = getattr(args, "second_opinion", "off")
+    if mode != "off" and people and (mode == "all" or decide.is_unclear(
+            verdict, choice, combined_scores(probs, people, args, prior), args.second_opinion_margin)):
+        try:
+            pick = ask_model_choice(args.second_opinion_model, email_text, question["criteria"])
+        except Exception as e:  # bigger model unavailable: keep system one's decision
+            pick, verdict["second_opinion_error"] = None, str(e)[:120]
+        if pick:
+            pick = MANUAL if is_nobody(pick) else pick
+            verdict["second_opinion"] = {"model": args.second_opinion_model, "pick": pick, "before": choice}
+            choice = pick
     if getattr(args, "tiebreak", False) and not is_nobody(choice):
         choice, verdict["tiebreak"] = tiebreak(email_text, people, probs, args, choice)
     return choice, answers, verdict
@@ -157,7 +199,7 @@ def fix(client: QdrantClient, email_text: str, person_id: str) -> str:
     if person_id not in people:
         return f"Unknown person '{person_id}'. Known: {', '.join(sorted(people))}"
     text = clean_email(email_text)
-    remember(client, text, embed_texts([text])[0], people[person_id], source="corrected")
+    remember(client, text, embed_emails([text])[0], people[person_id], source="corrected")
     save_label(email_text, MANUAL if is_nobody(person_id) else person_id, "corrected")
     return (f"Saved: emails like this now go to {people[person_id]['name']} ({person_id}). "
             f"Added to memory and to {config.REAL_LABELS}.")
@@ -193,7 +235,7 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
         except SystemOneDown:
             return {}
 
-    vector = embed_texts([text])[0]
+    vector = embed_emails([text])[0]
     timer.mark("embed")
 
     neighbors, hints = [], {}
@@ -216,7 +258,7 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
                 hints = decide.memory_hints([n + (h.payload.get("text", ""),) for n, h in zip(neighbors, hits)],
                                             args.memory_hint_min_sim, args.memory_hints_per_person)
 
-    people = shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
+    people = candidates(client, text, vector, args)
     timer.mark("search")
     prior = decide.memory_votes(neighbors, args.memory_min_sim) if use_memory else {}
 
@@ -256,8 +298,9 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
         remember(client, text, vector, person, source="auto")
         timer.mark("remember")
 
+    auto = path != "spam" and decide.safe_to_auto(path, verdict, choice, getattr(args, "auto_min_confidence", 2.0))
     return {"path": path, "person": person, "score": person["score"] if person else None, "people": people,
-            "answers": answers, "verdict": verdict, "timer": timer}
+            "answers": answers, "verdict": verdict, "timer": timer, "auto": auto}
 
 
 def is_spam(answers: dict, args) -> bool:
@@ -340,6 +383,7 @@ def log_decision(email_text: str, result: dict, source: str = "cli") -> None:
         "candidates": [{"id": p["person_id"], "score": round(p["score"], 4)} for p in result["people"]],
         "verdict": result["verdict"],
         "answers": result["answers"],
+        "auto": result.get("auto", False),
         "model": config.CHAT_MODEL,
         "ms": round(result["timer"].total),
     }
@@ -374,7 +418,7 @@ def confirm(email_text: str, client: QdrantClient | None = None) -> str:
     save_label(email_text, expected, "confirmed")
     if client is not None and expected in known_people(client):
         text = clean_email(email_text)
-        remember(client, text, embed_texts([text])[0], known_people(client)[expected], source="confirmed")
+        remember(client, text, embed_emails([text])[0], known_people(client)[expected], source="confirmed")
     return f"Confirmed: {expected} was right. Saved to memory and {config.REAL_LABELS}."
 
 

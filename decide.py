@@ -64,6 +64,36 @@ def select_candidates(scores: dict, nobody_ids: set, k: int, mode: str = "ranked
     return sorted(top, key=lambda pid: -scores[pid])
 
 
+def rerank_select(pool: list[dict], rerank_scores: dict, k: int) -> list[dict]:
+    """Candidates for system one after reranking a bigger search pool.
+
+    Real people: the k best by reranker score. Nobody profiles: kept only if they were in the top k by search
+    score (as without reranking). The best grouped match stays in, so the fast path sees the same list.
+    Returned best search score first, like the search shortlist.
+    """
+    by_score = sorted(pool, key=lambda p: -p["score"])
+    nobody = [p for p in by_score[:k] if is_nobody(p["person_id"])]
+    real = sorted((p for p in pool if not is_nobody(p["person_id"])),
+                  key=lambda p: -rerank_scores.get(p["person_id"], 0.0))[:k]
+    chosen = real + nobody
+    best_grouped = max(pool, key=lambda p: p["grouped_score"]) if pool else None
+    if best_grouped is not None and best_grouped not in chosen:
+        chosen.append(best_grouped)
+    return sorted(chosen, key=lambda p: -p["score"])
+
+
+def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float) -> bool:
+    """Whether a decision is safe to forward without a human: clear matches and memory (95-100% right in
+    tests), and system one picks it was at least min_confidence sure of and that search did not overrule
+    (min_confidence comes from experiments/calibration.py; above 1 means never)."""
+    if is_nobody(choice):
+        return False
+    if path in ("fast", "memory", "cache"):
+        return True
+    return (path == "llm" and verdict.get("system_one_choice") == choice
+            and (verdict.get("confidence") or 0) >= min_confidence)
+
+
 # ---------- decisions ----------
 
 def fast_pick(people: list[dict], min_score: float, min_margin: float) -> str | None:
@@ -142,7 +172,46 @@ def should_learn(path: str, verdict: dict, choice: str) -> bool:
     return path == "llm" and verdict.get("system_one_choice") == choice
 
 
+def rerank_select(pool: list[dict], rerank_scores: dict, k: int) -> list[dict]:
+    """Candidates for system one after reranking a bigger search pool.
+
+    Real people: the k best by reranker score. Nobody profiles: kept only if they were in the top k by search
+    score (as without reranking). The best grouped match stays in, so the fast path sees the same list.
+    Returned best search score first, like the search shortlist.
+    """
+    by_score = sorted(pool, key=lambda p: -p["score"])
+    nobody = [p for p in by_score[:k] if is_nobody(p["person_id"])]
+    real = sorted((p for p in pool if not is_nobody(p["person_id"])),
+                  key=lambda p: -rerank_scores.get(p["person_id"], 0.0))[:k]
+    chosen = real + nobody
+    best_grouped = max(pool, key=lambda p: p["grouped_score"]) if pool else None
+    if best_grouped is not None and best_grouped not in chosen:
+        chosen.append(best_grouped)
+    return sorted(chosen, key=lambda p: -p["score"])
+
+
+def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float) -> bool:
+    """Whether a decision is safe to forward without a human: clear matches and memory (95-100% right in
+    tests), and system one picks it was at least min_confidence sure of and that search did not overrule
+    (min_confidence comes from experiments/calibration.py; above 1 means never)."""
+    if is_nobody(choice):
+        return False
+    if path in ("fast", "memory", "cache"):
+        return True
+    return (path == "llm" and verdict.get("system_one_choice") == choice
+            and (verdict.get("confidence") or 0) >= min_confidence)
+
+
 # ---------- decisions ----------
+
+def is_unclear(verdict: dict, choice: str, combined: dict, margin: float) -> bool:
+    """A system one decision worth a second opinion: search overruled system one's own pick, or the best two
+    candidates are less than `margin` apart in the combined score."""
+    if verdict.get("system_one_choice") != choice:
+        return True
+    top = sorted(combined.values(), reverse=True)
+    return len(top) > 1 and top[0] - top[1] < margin
+
 
 def combined_scores(probs: dict, people: list[dict], search_weight: float, prior: dict | None = None,
                     prior_weight: float = 0.0) -> dict:

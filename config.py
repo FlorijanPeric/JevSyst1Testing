@@ -31,6 +31,9 @@ EMBEDDING_API_BACKOFF_SEC = float(os.environ.get("EMBEDDING_API_BACKOFF_SEC", "1
 # Backup: the same model through hivecore's OpenAI-compatible /v1/embeddings (identical vectors, cosine 1.0).
 # Must be the SAME model as above, or search quality silently breaks. Empty = no fallback.
 EMBEDDING_FALLBACK_MODEL = os.environ.get("EMBEDDING_FALLBACK_MODEL", "bge-m3:latest")
+# Put before every email (not profiles) when embedding; instruction-tuned embedders such as qwen3-embedding use it.
+EMBEDDING_QUERY_PREFIX = os.environ.get("EMBEDDING_QUERY_PREFIX", "").replace("\\n", "\n")
+RERANK_MODEL = os.environ.get("RERANK_MODEL", "qwen3-reranker")
 
 # Audit trail and real labels (both gitignored; real emails)
 DECISIONS_LOG = os.environ.get("DECISIONS_LOG", "data/decisions.jsonl")

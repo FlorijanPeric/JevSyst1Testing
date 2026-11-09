@@ -102,6 +102,74 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     return [found[k] for k in keys]
 
 
+def embed_emails(texts: list[str]) -> list[list[float]]:
+    """Embeddings of emails (queries), with EMBEDDING_QUERY_PREFIX in front if set. Profiles use embed_texts."""
+    prefix = config.EMBEDDING_QUERY_PREFIX
+    return embed_texts([prefix + t for t in texts] if prefix else texts)
+
+
+RERANK_TASK = "Given an email sent to a company, find the colleague whose job is to handle it"
+
+
+def rerank(query: str, documents: list[str]) -> list[float]:
+    """Relevance of each document to the query (same order), from the reranker on hivecore. Cached on disk.
+
+    Qwen3-reranker needs its instruction template: without it the scores were ~0.0-0.36, with it 0.4-0.9
+    and the right person first in every probe (2026-11-07)."""
+    if not documents:
+        return []
+    key = _cache.key("rr", config.RERANK_MODEL, query, documents) if _cache is not None else None
+    cached = _cache.get(key) if key else None
+    if cached is not None:
+        return cached
+    resp = _session.post(f"{config.HIVECORE_BASE_URL}/rerank", timeout=60, json={
+        "model": config.RERANK_MODEL, "query": f"<Instruct>: {RERANK_TASK}\n<Query>: {query}", "documents": documents})
+    resp.raise_for_status()
+    scores = [0.0] * len(documents)
+    for item in resp.json()["results"]:
+        scores[item["index"]] = item["relevance_score"]
+    if key:
+        _cache.put(key, scores)
+    return scores
+
+
+CHOICE_PROMPT = """Which colleague should this email be forwarded to? Answer with the id only.
+
+Email: "{email}"
+
+Options:
+{options}"""
+
+
+def ask_model_choice(model: str, email: str, criteria: dict) -> str | None:
+    """A bigger chat model picks one id from the same options system one saw ("second opinion").
+
+    Returns the id, or None if the answer is not one of the ids. reasoning_effort "none" turns off thinking
+    (qwen3.6 otherwise spent 300+ tokens thinking and answered nothing); the other models accept it too.
+    Cached on disk by (model, email, options)."""
+    key = _cache.key("so", model, email, criteria) if _cache is not None else None
+    cached = _cache.get(key) if key else None
+    if cached is not None:
+        return cached or None
+    options = "\n".join(f"{pid}: {desc}" for pid, desc in criteria.items())
+    prompt = CHOICE_PROMPT.format(email=" ".join(email.split())[:3000], options=options)
+    for attempt in range(3):
+        try:
+            resp = _openai_client.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": prompt}], temperature=0, max_tokens=20,
+                extra_body={"reasoning_effort": "none"})
+            break
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(3 * (attempt + 1))
+    answer = (resp.choices[0].message.content or "").strip().strip("`'\".*").lower()
+    pick = answer if answer in criteria else next((pid for pid in criteria if pid in answer.split()), None)
+    if key:
+        _cache.put(key, pick or "")
+    return pick
+
+
 def chat_complete(system_prompt: str, user_prompt: str) -> str:
     resp = _openai_client.chat.completions.create(
         model=config.CHAT_MODEL,
@@ -162,8 +230,8 @@ def _classify_once(state: str, questions: dict, model: str) -> dict:
     payload = {"model": model, "state": state, "questions": questions}
     for attempt in range(4):
         resp = _session.post(url, json=payload, timeout=config.SYSTEMONE_TIMEOUT)
-        # hivecore rate-limits (429) and occasionally has no free worker (503/504); back off and retry
-        if resp.status_code not in (429, 503, 504) or attempt == 3:
+        # hivecore rate-limits (429), sometimes has no free worker (503/504) or a gateway hiccup (502); retry
+        if resp.status_code not in (429, 502, 503, 504) or attempt == 3:
             break
         time.sleep(2 * (attempt + 1))
     resp.raise_for_status()

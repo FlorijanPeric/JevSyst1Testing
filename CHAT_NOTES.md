@@ -160,3 +160,25 @@ Experiment `experiments/conf_experiment.py` (run from the project folder) on the
   memory_min_sim 0.70, control not hurt (90 -> 91%, 82 -> 83%). Below 0.70 unrelated emails vote and the
   control drops, so 0.70 is the setting. memory_weight barely matters.
 - DeepSeek had no worker on hivecore on 2026-11-07 (round 7 stopped). Same token works for every hivecore model.
+
+## Rounds 9-10, 2026-11-08 to 2026-11-09: what helps system one's choice
+Baseline (system one only): handwritten 95/106 (90%), generated 287/330 (87%).
+- Round 9, none helped: qwen3-reranker before system one (search misses 0/3, but 94/106 overall);
+  qwen3-embedding with instruction (1 search miss, 91/106); profile suggestions learned on one half and
+  tested on the other (neutral); calibration: system one's confidence does not predict being right, so
+  auto-forward stays off for system one (`auto_min_confidence` 2.0), on only for fast path and memory.
+  Lesson: most mistakes are system one picking among the right candidates, not search missing someone.
+- Round 10, second opinion (`second_opinion*` in routing.toml): a bigger hivecore model picks again from the
+  same candidates and descriptions (`reasoning_effort: none`, else qwen3.6 thinks and answers nothing).
+
+  | model | all: handwritten / generated | unclear only: handwritten / generated |
+  |---|---|---|
+  | gemma-4-12b | **101 (95%)** / **297 (90%)** | **101 (95%)** / **295 (89%)** |
+  | GaMS3-12B | 96 / 276 | 100 / 288 |
+  | qwen3.6:35b | 93 / 276 | 98 / 289 |
+  | Qwen3-30B | 97 / 288 | 99 / 293 |
+
+  "Unclear" = search overruled system one, or the top two are within 0.15: 132 of 327 system one decisions
+  (40%). Gemma on unclear keeps almost all the gain (+6 / +8 vs +6 / +10 for all) with 2.5x fewer calls,
+  and the other models only stay positive when limited to unclear cases. Default now: `second_opinion =
+  "unclear"`, `gemma-4-12b`. If gemma fails, system one's decision stands.

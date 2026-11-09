@@ -20,7 +20,7 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 
 import config
-from clients import classify, embed_texts
+from clients import classify, embed_emails
 from route_email import MANUAL, is_nobody, add_routing_args, fast_pick, pick_recipient, recipient_question, shortlist
 
 POSTMAN_DIR = Path("postman")
@@ -125,7 +125,7 @@ def main() -> None:
         parser.error(f"no emails in {args.path}")
 
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
-    vectors = embed_texts([r["email"] for r in rows])
+    vectors = embed_emails([r["email"] for r in rows])
 
     ranked = []
     for i, (row, vector) in enumerate(zip(rows, vectors), 1):

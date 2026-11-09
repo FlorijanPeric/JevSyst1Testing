@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from qdrant_client import QdrantClient  # noqa: E402
 
 import config  # noqa: E402
-from clients import embed_texts  # noqa: E402
+from clients import embed_emails  # noqa: E402
 from decide import MANUAL, clean_email, is_nobody  # noqa: E402
 from route_email import add_routing_args, known_people, load_questions, remember, route  # noqa: E402
 
@@ -140,8 +140,8 @@ def main() -> None:
 
     # How similar is a rewording to its original? This decides memory_min_sim.
     pairs = groups["mistakes"] + groups["control"]
-    a = np.array(embed_texts([clean_email(r["email"]) for r, _ in pairs]))
-    b = np.array(embed_texts([clean_email(p) for _, p in pairs]))
+    a = np.array(embed_emails([clean_email(r["email"]) for r, _ in pairs]))
+    b = np.array(embed_emails([clean_email(p) for _, p in pairs]))
     sims = (a * b).sum(1) / (np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1))
     print("similarity rewording vs original: " + ", ".join(
         f"p{q} {np.percentile(sims, q):.2f}" for q in (10, 25, 50, 75, 90)), flush=True)
@@ -157,7 +157,7 @@ def main() -> None:
 
     for r in mistakes:  # the user fixes each mistake once
         text = clean_email(r["email"])
-        remember(client, text, embed_texts([text])[0], people[r["expected"]], source="corrected")
+        remember(client, text, embed_emails([text])[0], people[r["expected"]], source="corrected")
     print(f"fixed {len(mistakes)} mistakes (only the originals; the rewordings were never seen)\n")
 
     print(f"{'min_sim':>7}  {'weight':>6}  {'mistakes now right':>20}  {'control (must stay)':>20}")

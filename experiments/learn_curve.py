@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from qdrant_client import QdrantClient  # noqa: E402
 
 import config  # noqa: E402
-from clients import embed_texts  # noqa: E402
+from clients import embed_emails  # noqa: E402
 from decide import MANUAL, clean_email, is_nobody  # noqa: E402
 from route_email import add_routing_args, known_people, load_questions, remember, route  # noqa: E402
 
@@ -72,7 +72,7 @@ def main() -> None:
                 wrong, right = got != row["expected"], got == row["expected"]
                 if (args.feedback != "none" and wrong) or (args.feedback == "all" and right):
                     text = clean_email(row["email"])
-                    remember(client, text, embed_texts([text])[0], people[row["expected"]],
+                    remember(client, text, embed_emails([text])[0], people[row["expected"]],
                              source="corrected" if wrong else "confirmed")
 
     print(f"\n{'emails':>9}  {'accuracy':>8}  {'no system one':>13}  {'memory':>6}  {'memory ok':>9}  paths")

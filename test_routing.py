@@ -18,9 +18,10 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 
 import config
-from clients import classify, embed_texts
+from clients import SystemOneDown, classify, embed_emails
+import decide
 from decide import clean_email, spam_overruled
-from route_email import MANUAL, add_routing_args, ask_system_one, fast_pick, shortlist
+from route_email import MANUAL, add_routing_args, ask_system_one, candidates, fast_pick
 
 
 def main() -> None:
@@ -31,6 +32,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, help="Only test the first N emails")
     parser.add_argument("--spam", action="store_true",
                         help="Also apply the spam filter from data/questions.json, as normal routing does (spam counts as manual_triage)")
+    parser.add_argument("--out", help="Also write one CSV row per email (for experiments/calibration.py)")
     args = parser.parse_args()
 
     with Path(args.path).open(encoding="utf-8", newline="") as f:
@@ -42,25 +44,32 @@ def main() -> None:
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
     start = time.perf_counter()
     texts = [clean_email(t["email"]) if args.clean_emails else t["email"] for t in tests]
-    vectors = embed_texts(texts)
+    vectors = embed_emails(texts)
 
     def run_one(i: int) -> dict:
         test, text, vector = tests[i], texts[i], vectors[i]
-        people = shortlist(client, vector, args.candidates, args.ranking, args.nobody_candidates)
+        people = candidates(client, text, vector, args)
         fast = fast_pick(people, args.min_score, args.min_margin)
+        verdict = {}
         if fast:
             path, got, conf = "fast", fast, None
             answers = classify(text, spam_q) if spam_q else {}
         else:
             path = "llm"
-            got, answers, verdict = ask_system_one(text, people, spam_q, args)
-            conf = verdict["confidence"]
+            try:
+                got, answers, verdict = ask_system_one(text, people, spam_q, args)
+                conf = verdict["confidence"]
+            except SystemOneDown:  # as in routing: best search match, counted as its own path
+                path, answers, conf = "search-only", {}, None
+                got = MANUAL if decide.is_nobody(people[0]["person_id"]) else people[0]["person_id"]
         overruled = False
         if (answers.get("spam") or 0) >= args.spam_threshold:
             overruled = spam_overruled(people, args.spam_override_score)
             if not overruled:
                 path, got = "spam", MANUAL
-        row = {**test, "got": got, "path": path, "confidence": conf, "spam_overruled": overruled}
+        row = {**test, "got": got, "path": path, "confidence": conf, "spam_overruled": overruled,
+               "system_one_choice": verdict.get("system_one_choice"), "final_pick_prob": verdict.get("final_pick_prob"),
+               "second_opinion": verdict.get("second_opinion")}
         if labeled:
             row["in_shortlist"] = test["expected"] == MANUAL or any(p["person_id"] == test["expected"] for p in people)
             row["ok"] = got == test["expected"]
@@ -84,10 +93,17 @@ def main() -> None:
             print(f"  {pid:<14} {n}")
         return
 
+    if args.out:
+        fields = ["expected", "got", "ok", "path", "confidence", "final_pick_prob", "system_one_choice", "in_shortlist", "email"]
+        with open(args.out, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(results)
+
     total = len(results)
     correct = sum(r["ok"] for r in results)
     print(f"\nAccuracy:        {correct}/{total} ({correct / total:.0%})  in {time.perf_counter() - start:.0f}s")
-    for path in ("fast", "llm", "spam"):
+    for path in ("fast", "llm", "spam", "search-only"):
         rows = [r for r in results if r["path"] == path]
         if rows:
             print(f"  {path:<4} path:     {sum(r['ok'] for r in rows)}/{len(rows)} correct")
@@ -98,6 +114,13 @@ def main() -> None:
     overruled = [r for r in results if r["spam_overruled"]]
     if overruled:
         print(f"  spam overruled by a clear match: {sum(r['ok'] for r in overruled)}/{len(overruled)} correct")
+    asked = [r for r in results if r["second_opinion"]]
+    if asked:
+        changed = [r for r in asked if r["second_opinion"]["pick"] != r["second_opinion"]["before"]]
+        fixed = sum(r["ok"] for r in changed)
+        broke = sum(r["second_opinion"]["before"] == r["expected"] for r in changed)
+        print(f"  second opinion:  asked {len(asked)}, changed {len(changed)}: fixed {fixed}, broke {broke}, "
+              f"net {fixed - broke:+d}")
     missed = [r for r in results if not r["in_shortlist"]]
     print(f"Search misses:   {len(missed)} (right person not in top {args.candidates}, system one never saw them)")
 

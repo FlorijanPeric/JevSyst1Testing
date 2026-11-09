@@ -16,6 +16,8 @@
 #   ./run.sh serve               web API on http://127.0.0.1:8090 (see service.py)
 #   ./run.sh tune [file.csv]     re-tune routing.toml from real labels (add --write to apply)
 #   ./run.sh unit                unit tests of the decision logic (no network)
+#   ./run.sh suggest [--apply 1,3]   new profile lines learned from corrections (you approve them)
+#   ./run.sh calibrate a.csv ...     system one accuracy per confidence (CSV from: ./run.sh test FILE --out a.csv)
 # Settings: routing.toml. Colleagues: data/colleagues.csv + data/nobody_profiles.csv + learned corrections.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -58,6 +60,14 @@ case "${1:-}" in
   tune)
     shift
     python tune.py "$@"
+    ;;
+  suggest)
+    shift
+    python suggest_profiles.py "$@"
+    ;;
+  calibrate)
+    shift
+    python experiments/calibration.py "$@"
     ;;
   unit)
     shift

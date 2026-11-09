@@ -13,6 +13,16 @@ spam_override_score = 0.55   # ... unless a real person's grouped score is this 
 candidates = 5               # real people (top-up), plus nobody profiles only when they rank in the top 5
 ranking = "window"           # "window" or "grouped"; a tie in the real code (273 vs 271 of 330)
 nobody_candidates = "ranked" # "ranked" (281/330) or "always" (272-274/330)
+rerank = false               # re-sort a bigger search pool with qwen3-reranker before system one (being tested)
+rerank_pool = 10             # people the reranker looks at; the best `candidates` of them go to system one
+
+# Second opinion: a bigger chat model on hivecore re-decides system one decisions (same options, same text)
+second_opinion = "unclear"   # "off", "unclear" (search overruled system one, or top two closer than the margin), "all"
+second_opinion_model = "gemma-4-12b"
+second_opinion_margin = 0.15
+
+# Auto-forward: which decisions are safe without a human (route result "auto", API "auto_forward")
+auto_min_confidence = 2.0    # system one picks need this confidence (above 1 = never); set by experiments/calibration.py
 
 # Memory: learn from corrections (fix), confirmations (ok) and decisions two signals agreed on
 memory = true                # use similar past emails (off = round 3 behaviour)

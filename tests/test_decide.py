@@ -5,8 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import settings  # noqa: E402
-from decide import (MANUAL, clean_email, combined_scores, fast_pick, is_nobody, memory_pick,  # noqa: E402
-                    memory_hints, memory_votes, pick_recipient, select_candidates, should_learn, spam_overruled)
+from decide import (MANUAL, clean_email, combined_scores, fast_pick, is_nobody, is_unclear, memory_pick,  # noqa: E402
+                    memory_hints, memory_votes, pick_recipient, rerank_select, safe_to_auto, select_candidates, should_learn, spam_overruled)
 
 
 def person(pid, score, grouped=None, margin=-1.0):
@@ -182,13 +182,44 @@ def test_should_learn_only_agreed_decisions():
     assert not should_learn("fast", {}, MANUAL)
 
 
+# ---------- reranking and auto-forward ----------
+
+def test_rerank_select_takes_reranker_order_for_real_people():
+    pool = [person("a", 0.9), person("manual_spam", 0.85), person("b", 0.8), person("c", 0.7), person("d", 0.6)]
+    chosen = rerank_select(pool, {"a": 0.1, "b": 0.2, "c": 0.9, "d": 0.8}, 2)
+    ids = [p["person_id"] for p in chosen]
+    assert set(ids) == {"c", "d", "manual_spam", "a"}  # c, d by reranker; spam was top 2 by search; a = best grouped
+    assert ids == sorted(ids, key=lambda i: -{p["person_id"]: p["score"] for p in pool}[i])  # search order kept
+
+
+def test_rerank_select_drops_nobody_outside_search_top_k():
+    pool = [person("a", 0.9), person("b", 0.8), person("manual_spam", 0.5)]
+    assert "manual_spam" not in [p["person_id"] for p in rerank_select(pool, {"a": 0.5, "b": 0.6}, 2)]
+
+
+def test_safe_to_auto():
+    assert safe_to_auto("fast", {}, "jan", 2.0) and safe_to_auto("memory", {}, "jan", 2.0)
+    assert not safe_to_auto("llm", {"system_one_choice": "jan", "confidence": 0.9}, "jan", 2.0)  # never
+    assert safe_to_auto("llm", {"system_one_choice": "jan", "confidence": 0.7}, "jan", 0.6)
+    assert not safe_to_auto("llm", {"system_one_choice": "tilen", "confidence": 0.9}, "jan", 0.6)  # overruled
+    assert not safe_to_auto("fast", {}, MANUAL, 0.6) and not safe_to_auto("search-only", {}, "jan", 0.0)
+
+
+def test_is_unclear():
+    assert is_unclear({"system_one_choice": "tilen"}, "jan", {"jan": 0.9, "tilen": 0.1}, 0.15)  # overruled
+    assert is_unclear({"system_one_choice": "jan"}, "jan", {"jan": 0.5, "tilen": 0.4}, 0.15)  # close
+    assert not is_unclear({"system_one_choice": "jan"}, "jan", {"jan": 0.8, "tilen": 0.3}, 0.15)
+    assert not is_unclear({"system_one_choice": "jan"}, "jan", {"jan": 0.8}, 0.15)
+
+
 # ---------- settings ----------
 
 def test_routing_toml_has_every_setting():
     s = settings.load()
     for key in ("search_weight", "manual_threshold", "min_score", "min_margin", "spam_threshold", "spam_override_score", "candidates", "memory",
                 "memory_k", "memory_min_sim", "memory_min_support", "memory_min_share", "memory_weight", "auto_learn",
-                "memory_hints", "memory_hint_min_sim", "memory_hints_per_person",
+                "memory_hints", "memory_hint_min_sim", "memory_hints_per_person", "rerank", "rerank_pool",
+                "auto_min_confidence", "second_opinion", "second_opinion_model", "second_opinion_margin",
                 "ranking", "nobody_candidates", "tiebreak", "cache_threshold", "clean_emails",
                 "fast_path_questions", "workers", "learned_examples_per_person"):
         assert hasattr(s, key), key

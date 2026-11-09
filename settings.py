@@ -34,6 +34,15 @@ def add_routing_args(parser: argparse.ArgumentParser, settings: SimpleNamespace 
     parser.add_argument("--spam-override-score", type=float, default=s.spam_override_score,
                         help="Forward anyway when a real person's grouped score is at least this")
     parser.add_argument("--cache-threshold", type=float, default=s.cache_threshold, help="Reuse past decisions this similar")
+    parser.add_argument("--rerank", action=argparse.BooleanOptionalAction, default=s.rerank,
+                        help="Re-sort a bigger search pool with the reranker before system one")
+    parser.add_argument("--rerank-pool", type=int, default=s.rerank_pool)
+    parser.add_argument("--second-opinion", choices=["off", "unclear", "all"], default=s.second_opinion,
+                        help="Let a bigger model re-decide system one decisions (unclear ones or all)")
+    parser.add_argument("--second-opinion-model", default=s.second_opinion_model)
+    parser.add_argument("--second-opinion-margin", type=float, default=s.second_opinion_margin)
+    parser.add_argument("--auto-min-confidence", type=float, default=s.auto_min_confidence,
+                        help="System one confidence needed to auto-forward (above 1 = never)")
     parser.add_argument("--memory", action=argparse.BooleanOptionalAction, default=s.memory,
                         help="Use similar past emails (corrections, confirmations, trusted decisions)")
     parser.add_argument("--memory-k", type=int, default=s.memory_k)

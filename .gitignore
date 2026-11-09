@@ -24,3 +24,4 @@ data/colleagues.*.csv
 final/
 round*/
 *.log
+data/profile_suggestions.csv

@@ -66,6 +66,7 @@ def route_email(body: RouteIn) -> dict:
         "summary": describe(result),
         "decided_by": PATH_LABELS[result["path"]],
         "path": result["path"],
+        "auto_forward": result.get("auto", False),  # safe to forward without a human (decide.safe_to_auto)
         "answers": result["answers"],
         "verdict": result["verdict"],
         "candidates": [{"id": p["person_id"], "score": round(p["score"], 4)} for p in result["people"]],
