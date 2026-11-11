@@ -146,8 +146,8 @@ def ask_model_choice(model: str, email: str, criteria: dict) -> str | None:
 
     Returns the id, or None if the answer is not one of the ids. reasoning_effort "none" turns off thinking
     (qwen3.6 otherwise spent 300+ tokens thinking and answered nothing); the other models accept it too.
-    Cached on disk by (model, email, options)."""
-    key = _cache.key("so", model, email, criteria) if _cache is not None else None
+    Cached on disk by (model, email, options), unless CACHE_SYSTEMONE=0."""
+    key = _cache.key("so", model, email, criteria) if _cache is not None and config.CACHE_SYSTEMONE else None
     cached = _cache.get(key) if key else None
     if cached is not None:
         return cached or None

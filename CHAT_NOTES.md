@@ -182,3 +182,14 @@ Baseline (system one only): handwritten 95/106 (90%), generated 287/330 (87%).
   (40%). Gemma on unclear keeps almost all the gain (+6 / +8 vs +6 / +10 for all) with 2.5x fewer calls,
   and the other models only stay positive when limited to unclear cases. Default now: `second_opinion =
   "unclear"`, `gemma-4-12b`. If gemma fails, system one's decision stands.
+
+## Round 11, 2026-11-09: shaking up the second opinion (`run_round11.sh`)
+- Fresh answers (CACHE_SYSTEMONE=0, now also for the second opinion), two repeats: without gemma 95 / 284-285,
+  with gemma on unclear 100-101 / 293-294. Repeats differ by 1 email, the gain is +5-6 / +9-10: real, not noise.
+- Unseen rewordings (half of them rewordings of emails the router got wrong, so a hard set): Qwen3-30B rewordings
+  181 -> 210/314 (58 -> 67%, fixed 34, broke 4); Gemma + GaMS rewordings 174 -> 219/319 (55 -> 69%, fixed 49,
+  broke 4). Gemma helps most where system one struggles, and almost never breaks a right decision there.
+- Margin: 0.10 asks 38 / 89 times (101 / 294), 0.15 asks 38 / 94 (101 / 295), 0.25 asks 50 / 109 (101 / 297).
+  0.25 adds ~20% calls for +2 on generated; kept 0.15.
+- Learning curve (memory + feedback on everything, seed 2): 386 -> 403/436 (88.5 -> 92.4%) with gemma; memory
+  decisions 85/85 right either way, 49 of the last 100 emails skip system one either way.
