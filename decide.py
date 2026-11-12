@@ -82,18 +82,6 @@ def rerank_select(pool: list[dict], rerank_scores: dict, k: int) -> list[dict]:
     return sorted(chosen, key=lambda p: -p["score"])
 
 
-def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float) -> bool:
-    """Whether a decision is safe to forward without a human: clear matches and memory (95-100% right in
-    tests), and system one picks it was at least min_confidence sure of and that search did not overrule
-    (min_confidence comes from experiments/calibration.py; above 1 means never)."""
-    if is_nobody(choice):
-        return False
-    if path in ("fast", "memory", "cache"):
-        return True
-    return (path == "llm" and verdict.get("system_one_choice") == choice
-            and (verdict.get("confidence") or 0) >= min_confidence)
-
-
 # ---------- decisions ----------
 
 def fast_pick(people: list[dict], min_score: float, min_margin: float) -> str | None:
@@ -190,16 +178,35 @@ def rerank_select(pool: list[dict], rerank_scores: dict, k: int) -> list[dict]:
     return sorted(chosen, key=lambda p: -p["score"])
 
 
-def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float) -> bool:
+def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float, on_agreement: bool = False) -> bool:
     """Whether a decision is safe to forward without a human: clear matches and memory (95-100% right in
     tests), and system one picks it was at least min_confidence sure of and that search did not overrule
-    (min_confidence comes from experiments/calibration.py; above 1 means never)."""
+    (min_confidence comes from experiments/calibration.py; above 1 means never). on_agreement: also system
+    one picks that every second-opinion model agreed with (models_agree)."""
     if is_nobody(choice):
         return False
     if path in ("fast", "memory", "cache"):
         return True
-    return (path == "llm" and verdict.get("system_one_choice") == choice
-            and (verdict.get("confidence") or 0) >= min_confidence)
+    if path != "llm" or verdict.get("system_one_choice") != choice:
+        return False
+    return (verdict.get("confidence") or 0) >= min_confidence or (on_agreement and models_agree(verdict, choice))
+
+
+def models_agree(verdict: dict, choice: str) -> bool:
+    """System one and every second-opinion model picked `choice`."""
+    second = verdict.get("second_opinion") or {}
+    votes = second.get("votes") or ({second.get("model"): second.get("pick")} if second else {})
+    return (verdict.get("system_one_choice") == choice and bool(votes)
+            and all(pick == choice for pick in votes.values()))
+
+
+def majority(picks: list[str | None]) -> str | None:
+    """The pick most models gave; a tie goes to the earliest model in the list. None = no model answered."""
+    given = [p for p in picks if p]
+    if not given:
+        return None
+    counts = {p: given.count(p) for p in given}
+    return max(given, key=lambda p: (counts[p], -given.index(p)))
 
 
 # ---------- decisions ----------

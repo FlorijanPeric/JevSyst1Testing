@@ -13,16 +13,23 @@ spam_override_score = 0.55   # ... unless a real person's grouped score is this 
 candidates = 5               # real people (top-up), plus nobody profiles only when they rank in the top 5
 ranking = "window"           # "window" or "grouped"; a tie in the real code (273 vs 271 of 330)
 nobody_candidates = "ranked" # "ranked" (281/330) or "always" (272-274/330)
-rerank = false               # re-sort a bigger search pool with qwen3-reranker before system one (being tested)
+rerank = false               # re-sort a bigger search pool with qwen3-reranker before system one (round 9: fewer search misses, lower accuracy)
 rerank_pool = 10             # people the reranker looks at; the best `candidates` of them go to system one
+search_summary = false       # also search on a one-line English summary of the request (round 12: worse, more search misses)
+search_summary_weight = 0.5  # share of the summary in the search vector (the email keeps the rest)
+summary_model = "gemma-4-12b"
 
 # Second opinion: a bigger chat model on hivecore re-decides system one decisions (same options, same text)
-second_opinion = "unclear"   # "off", "unclear" (search overruled system one, or top two closer than the margin), "all"
-second_opinion_model = "gemma-4-12b"
+second_opinion = "all"       # "off", "unclear" (search overruled system one, or top two closer than the margin), "all"
+                             # round 12: "all" 888 vs "unclear" 832 right of 1069 (most on reworded emails)
+second_opinion_model = "gemma-4-12b"   # several, comma-separated: majority vote, a tie goes to the first
+                                       # (gemma + Qwen3-30B + GaMS: not more accurate, 880 vs 888)
 second_opinion_margin = 0.15
 
 # Auto-forward: which decisions are safe without a human (route result "auto", API "auto_forward")
 auto_min_confidence = 2.0    # system one picks need this confidence (above 1 = never); set by experiments/calibration.py
+auto_on_agreement = false    # also system one picks every second-opinion model agreed with; with gemma alone
+                             # 93% right on normal emails (too low), with the 3-model vote 97% (see CHAT_NOTES.md)
 
 # Memory: learn from corrections (fix), confirmations (ok) and decisions two signals agreed on
 memory = true                # use similar past emails (off = round 3 behaviour)

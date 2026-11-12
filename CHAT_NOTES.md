@@ -193,3 +193,25 @@ Baseline (system one only): handwritten 95/106 (90%), generated 287/330 (87%).
   0.25 adds ~20% calls for +2 on generated; kept 0.15.
 - Learning curve (memory + feedback on everything, seed 2): 386 -> 403/436 (88.5 -> 92.4%) with gemma; memory
   decisions 85/85 right either way, 49 of the last 100 emails skip system one either way.
+
+## Round 12, 2026-11-11: agreement, model vote, summary search (`run_round12.sh`)
+Four sets: handwritten 106, generated 330, reworded Qwen 314, reworded Gemma + GaMS 319 (half of the reworded ones
+come from emails the router got wrong, so they are hard).
+
+| setup | handwritten | generated | reworded Qwen | reworded Gemma+GaMS | total of 1069 |
+|---|---|---|---|---|---|
+| gemma on unclear (old default) | 101 | 295 | 211 | 225 | 832 |
+| **gemma on every system one decision** | 101 | **297** | **240** | **250** | **888** |
+| vote gemma + Qwen3-30B + GaMS, unclear | 102 | 294 | 208 | 221 | 825 |
+| vote, every decision | 101 | 294 | 242 | 243 | 880 |
+| summary search 0.3 / 0.5 / 0.7 (+ gemma unclear) | 103 / 100 / 100 | 283 / 287 / 287 | 212 / 202 / 210 | 223 / 226 / 203 | 821 / 815 / 800 |
+
+- Default now `second_opinion = "all"` (gemma, ~0.2 s per system one decision). The unclear rule misses many of
+  the decisions gemma fixes on reworded emails (+56 of 1069).
+- Vote: no better than gemma alone. The models disagree on a third of the hard emails.
+- Summary search: worse (search misses 5 -> 9 on generated). Off.
+- Auto-forward on agreement (system one = second opinion = final pick), share right, on handwritten + generated:
+  gemma alone 200/215 (93%); all 3 voters 168/174 (97%); fast path 98/99. On the hard reworded sets 73-75%
+  (gemma) and 82-88% (vote), but the fast path itself is only 84-89% there. Agreement with gemma alone is not safe
+  enough; the 3-model vote is as good as the fast path but costs a Qwen3-30B call (6-8 s) per email.
+  `auto_on_agreement` stays off; a next step could use the extra voters only to check, gemma deciding.

@@ -4,15 +4,17 @@ import hashlib
 import json
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
 
 import config
 import decide
-from clients import SystemOneDown, ask_model_choice, classify, embed_emails, rerank
+from clients import SystemOneDown, ask_model_choice, classify, embed_emails, rerank, summarize_request
 from decide import MANUAL, clean_email, fast_pick, is_nobody  # noqa: F401 (re-exported for other scripts)
 from ingest import ensure_collection
 from profiles import get_store
@@ -134,17 +136,52 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
     mode = getattr(args, "second_opinion", "off")
     if mode != "off" and people and (mode == "all" or decide.is_unclear(
             verdict, choice, combined_scores(probs, people, args, prior), args.second_opinion_margin)):
-        try:
-            pick = ask_model_choice(args.second_opinion_model, email_text, question["criteria"])
-        except Exception as e:  # bigger model unavailable: keep system one's decision
-            pick, verdict["second_opinion_error"] = None, str(e)[:120]
+        votes = second_opinions(email_text, question["criteria"], args.second_opinion_model, verdict)
+        pick = decide.majority(list(votes.values()))
         if pick:
-            pick = MANUAL if is_nobody(pick) else pick
             verdict["second_opinion"] = {"model": args.second_opinion_model, "pick": pick, "before": choice}
+            if len(votes) > 1:
+                verdict["second_opinion"]["votes"] = votes
             choice = pick
     if getattr(args, "tiebreak", False) and not is_nobody(choice):
         choice, verdict["tiebreak"] = tiebreak(email_text, people, probs, args, choice)
     return choice, answers, verdict
+
+
+def second_opinions(email_text: str, criteria: dict, models: str, verdict: dict) -> dict:
+    """Each model in the comma-separated list picks an id ({model: pick}, MANUAL for nobody, None if it gave
+    no valid id). A model that fails is noted in the verdict; the others still vote."""
+    names = [m.strip() for m in models.split(",") if m.strip()]
+
+    def ask(model: str) -> str | None:
+        try:
+            pick = ask_model_choice(model, email_text, criteria)
+        except Exception as e:  # bigger model unavailable: the others (or system one) decide
+            verdict.setdefault("second_opinion_error", {})[model] = str(e)[:120]
+            return None
+        return MANUAL if pick and is_nobody(pick) else pick
+
+    if len(names) == 1:
+        return {names[0]: ask(names[0])}
+    with ThreadPoolExecutor(max_workers=len(names)) as pool:
+        return dict(zip(names, pool.map(ask, names)))
+
+
+def search_vector(text: str, vector: list[float], args) -> list[float]:
+    """The vector that ranks people. With search_summary on, a one-line summary of the request (summary_model)
+    is embedded too and mixed in with search_summary_weight; the email's own vector stays for memory."""
+    if not getattr(args, "search_summary", False):
+        return vector
+    try:
+        summary = summarize_request(args.summary_model, text)
+    except Exception as e:  # summary model unavailable: search on the email alone
+        print(f"[fallback] summary failed ({str(e)[:80]}); searching on the email alone")
+        return vector
+    if not summary:
+        return vector
+    w = args.search_summary_weight
+    a, b = np.asarray(vector, dtype=np.float32), np.asarray(embed_emails([summary])[0], dtype=np.float32)
+    return list((1 - w) * a / np.linalg.norm(a) + w * b / np.linalg.norm(b))
 
 
 def tiebreak(email_text: str, people: list[dict], probs: dict, args, choice: str) -> tuple[str, dict | None]:
@@ -258,7 +295,7 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
                 hints = decide.memory_hints([n + (h.payload.get("text", ""),) for n, h in zip(neighbors, hits)],
                                             args.memory_hint_min_sim, args.memory_hints_per_person)
 
-    people = candidates(client, text, vector, args)
+    people = candidates(client, text, search_vector(text, vector, args), args)
     timer.mark("search")
     prior = decide.memory_votes(neighbors, args.memory_min_sim) if use_memory else {}
 
@@ -298,7 +335,8 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
         remember(client, text, vector, person, source="auto")
         timer.mark("remember")
 
-    auto = path != "spam" and decide.safe_to_auto(path, verdict, choice, getattr(args, "auto_min_confidence", 2.0))
+    auto = path != "spam" and decide.safe_to_auto(path, verdict, choice, getattr(args, "auto_min_confidence", 2.0),
+                                                       getattr(args, "auto_on_agreement", False))
     return {"path": path, "person": person, "score": person["score"] if person else None, "people": people,
             "answers": answers, "verdict": verdict, "timer": timer, "auto": auto}
 

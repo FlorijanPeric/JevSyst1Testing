@@ -21,7 +21,7 @@ import config
 from clients import SystemOneDown, classify, embed_emails
 import decide
 from decide import clean_email, spam_overruled
-from route_email import MANUAL, add_routing_args, ask_system_one, candidates, fast_pick
+from route_email import MANUAL, add_routing_args, ask_system_one, candidates, fast_pick, search_vector
 
 
 def main() -> None:
@@ -48,7 +48,7 @@ def main() -> None:
 
     def run_one(i: int) -> dict:
         test, text, vector = tests[i], texts[i], vectors[i]
-        people = candidates(client, text, vector, args)
+        people = candidates(client, text, search_vector(text, vector, args), args)
         fast = fast_pick(people, args.min_score, args.min_margin)
         verdict = {}
         if fast:
@@ -69,7 +69,9 @@ def main() -> None:
                 path, got = "spam", MANUAL
         row = {**test, "got": got, "path": path, "confidence": conf, "spam_overruled": overruled,
                "system_one_choice": verdict.get("system_one_choice"), "final_pick_prob": verdict.get("final_pick_prob"),
-               "second_opinion": verdict.get("second_opinion")}
+               "second_opinion": verdict.get("second_opinion"),
+               "auto": path != "spam" and decide.safe_to_auto(path, verdict, got, args.auto_min_confidence),
+               "agree": path == "llm" and decide.models_agree(verdict, got)}
         if labeled:
             row["in_shortlist"] = test["expected"] == MANUAL or any(p["person_id"] == test["expected"] for p in people)
             row["ok"] = got == test["expected"]
@@ -94,7 +96,8 @@ def main() -> None:
         return
 
     if args.out:
-        fields = ["expected", "got", "ok", "path", "confidence", "final_pick_prob", "system_one_choice", "in_shortlist", "email"]
+        fields = ["expected", "got", "ok", "path", "confidence", "final_pick_prob", "system_one_choice", "agree",
+                  "in_shortlist", "email"]
         with open(args.out, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
@@ -121,6 +124,15 @@ def main() -> None:
         broke = sum(r["second_opinion"]["before"] == r["expected"] for r in changed)
         print(f"  second opinion:  asked {len(asked)}, changed {len(changed)}: fixed {fixed}, broke {broke}, "
               f"net {fixed - broke:+d}")
+        votes = [r for r in asked if r["second_opinion"].get("votes")]
+        if votes:
+            split = sum(len(set(r["second_opinion"]["votes"].values())) > 1 for r in votes)
+            print(f"  model votes:     {len(votes)} votes, models disagreed in {split}")
+    auto = [r for r in results if r["auto"]]
+    agreed = [r for r in results if r["agree"] and not r["auto"]]
+    print(f"  auto-forward:    now {len(auto)}/{total} ({sum(r['ok'] for r in auto)} right); system one + models agree "
+          f"on {len(agreed)} more ({sum(r['ok'] for r in agreed)} right) -> {len(auto) + len(agreed)}/{total} "
+          f"({sum(r['ok'] for r in auto + agreed)} right)")
     missed = [r for r in results if not r["in_shortlist"]]
     print(f"Search misses:   {len(missed)} (right person not in top {args.candidates}, system one never saw them)")
 

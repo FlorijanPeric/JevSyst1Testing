@@ -5,8 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import settings  # noqa: E402
-from decide import (MANUAL, clean_email, combined_scores, fast_pick, is_nobody, is_unclear, memory_pick,  # noqa: E402
-                    memory_hints, memory_votes, pick_recipient, rerank_select, safe_to_auto, select_candidates, should_learn, spam_overruled)
+from decide import (MANUAL, clean_email, combined_scores, fast_pick, is_nobody, is_unclear, majority,  # noqa: E402
+                    memory_pick, memory_hints, models_agree, memory_votes, pick_recipient, rerank_select, safe_to_auto, select_candidates, should_learn, spam_overruled)
 
 
 def person(pid, score, grouped=None, margin=-1.0):
@@ -205,6 +205,23 @@ def test_safe_to_auto():
     assert not safe_to_auto("fast", {}, MANUAL, 0.6) and not safe_to_auto("search-only", {}, "jan", 0.0)
 
 
+def test_safe_to_auto_on_agreement():
+    agreed = {"system_one_choice": "jan", "confidence": 0.5, "second_opinion": {"pick": "jan", "votes": {"a": "jan", "b": "jan"}}}
+    split = {"system_one_choice": "jan", "confidence": 0.5, "second_opinion": {"pick": "jan", "votes": {"a": "jan", "b": "tilen"}}}
+    single = {"system_one_choice": "jan", "second_opinion": {"model": "a", "pick": "jan", "before": "jan"}}
+    assert safe_to_auto("llm", agreed, "jan", 2.0, on_agreement=True) and models_agree(single, "jan")
+    assert not safe_to_auto("llm", agreed, "jan", 2.0)  # off by default
+    assert not safe_to_auto("llm", split, "jan", 2.0, on_agreement=True)
+    assert not safe_to_auto("llm", {"system_one_choice": "jan"}, "jan", 2.0, on_agreement=True)  # nobody asked
+    assert not safe_to_auto("llm", agreed | {"system_one_choice": "tilen"}, "jan", 2.0, on_agreement=True)
+
+
+def test_majority():
+    assert majority(["jan", "tilen", "tilen"]) == "tilen"
+    assert majority(["jan", "tilen", "sara"]) == "jan"  # tie: first model
+    assert majority([None, "tilen", None]) == "tilen" and majority([None, None]) is None
+
+
 def test_is_unclear():
     assert is_unclear({"system_one_choice": "tilen"}, "jan", {"jan": 0.9, "tilen": 0.1}, 0.15)  # overruled
     assert is_unclear({"system_one_choice": "jan"}, "jan", {"jan": 0.5, "tilen": 0.4}, 0.15)  # close
@@ -220,6 +237,7 @@ def test_routing_toml_has_every_setting():
                 "memory_k", "memory_min_sim", "memory_min_support", "memory_min_share", "memory_weight", "auto_learn",
                 "memory_hints", "memory_hint_min_sim", "memory_hints_per_person", "rerank", "rerank_pool",
                 "auto_min_confidence", "second_opinion", "second_opinion_model", "second_opinion_margin",
+                "auto_on_agreement", "search_summary", "search_summary_weight", "summary_model",
                 "ranking", "nobody_candidates", "tiebreak", "cache_threshold", "clean_emails",
                 "fast_path_questions", "workers", "learned_examples_per_person"):
         assert hasattr(s, key), key

@@ -170,6 +170,37 @@ def ask_model_choice(model: str, email: str, criteria: dict) -> str | None:
     return pick
 
 
+SUMMARY_PROMPT = """In one short English sentence, what does this email ask for or report? Name the topic, not the
+sender. Output only the sentence.
+
+Email: "{email}"
+"""
+
+
+def summarize_request(model: str, email: str) -> str:
+    """One English line saying what an email is about; search uses it next to the email (search_summary).
+    Empty string if the model gave nothing. Cached on disk by (model, email)."""
+    key = _cache.key("sum", model, email) if _cache is not None and config.CACHE_SYSTEMONE else None
+    cached = _cache.get(key) if key else None
+    if cached is not None:
+        return cached
+    for attempt in range(3):
+        try:
+            resp = _openai_client.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": SUMMARY_PROMPT.format(email=" ".join(email.split())[:3000])}],
+                temperature=0, max_tokens=60, extra_body={"reasoning_effort": "none"})
+            break
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(3 * (attempt + 1))
+    lines = (resp.choices[0].message.content or "").strip().strip('"').splitlines() if resp.choices else []
+    summary = lines[0].strip() if lines else ""
+    if key:
+        _cache.put(key, summary)
+    return summary
+
+
 def chat_complete(system_prompt: str, user_prompt: str) -> str:
     resp = _openai_client.chat.completions.create(
         model=config.CHAT_MODEL,
