@@ -86,6 +86,7 @@ def recipient_question(people: list[dict], hints: dict | None = None) -> dict:
     hints = hints or {}
     quote = lambda texts: "; ".join(f'"{" ".join(t.split())[:200]}"' for t in texts)
     criteria = {p["person_id"]: f"{p['name']}, {p['role']}. Handles: {'; '.join(p['matched'])}"
+                + (f". Not for them: {'; '.join(p['boundaries'])}" if p.get("boundaries") else "")
                 + (f". Similar past emails that went to them: {quote(hints[p['person_id']])}" if p["person_id"] in hints else "")
                 for p in people}
     criteria[MANUAL] = "None of these people fit; needs a human to triage" + (
@@ -138,6 +139,9 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
             verdict, choice, combined_scores(probs, people, args, prior), args.second_opinion_margin)):
         votes = second_opinions(email_text, question["criteria"], args.second_opinion_model, verdict)
         pick = decide.majority(list(votes.values()))
+        if pick and is_nobody(pick):  # "nobody" only when system one also leaned that way
+            pick = decide.keep_real_person(pick, probs, combined_scores(probs, people, args, prior),
+                                           getattr(args, "second_opinion_nobody_min", 0.0))
         if pick:
             verdict["second_opinion"] = {"model": args.second_opinion_model, "pick": pick, "before": choice}
             if len(votes) > 1:
@@ -168,6 +172,16 @@ def second_opinions(email_text: str, criteria: dict, models: str, verdict: dict)
         return {names[0]: ask(names[0])}
     with ThreadPoolExecutor(max_workers=len(names)) as pool:
         return dict(zip(names, pool.map(ask, names)))
+
+
+def fast_verdict(text: str, people: list[dict], choice: str, args) -> dict:
+    """What auto-forwarding needs about a clear match: its lead over #2, and the check models' picks
+    (auto_fast_check_models, same options system one would see) when set."""
+    verdict = {"fast_margin": next((p["grouped_margin"] for p in people if p["person_id"] == choice), 0.0)}
+    checkers = getattr(args, "auto_fast_check_models", "")
+    if checkers and not is_nobody(choice):
+        verdict["auto_check"] = second_opinions(text, recipient_question(people)["criteria"], checkers, verdict)
+    return verdict
 
 
 def search_vector(text: str, vector: list[float], args) -> list[float]:
@@ -310,7 +324,7 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
         answers = ask_skipped()
         timer.mark("questions")
     elif fast:
-        path, choice, verdict = "fast", fast, {}
+        path, choice, verdict = "fast", fast, fast_verdict(text, people, fast, args)
         answers = ask_skipped()
         timer.mark("questions")
     else:
@@ -339,7 +353,8 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
         timer.mark("remember")
 
     auto = path != "spam" and decide.safe_to_auto(path, verdict, choice, getattr(args, "auto_min_confidence", 2.0),
-                                                       getattr(args, "auto_on_agreement", False))
+                                                       getattr(args, "auto_on_agreement", False),
+                                                       getattr(args, "auto_fast_min_margin", 0.0))
     return {"path": path, "person": person, "score": person["score"] if person else None, "people": people,
             "answers": answers, "verdict": verdict, "timer": timer, "auto": auto}
 

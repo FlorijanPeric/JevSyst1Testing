@@ -21,7 +21,7 @@ import config
 from clients import SystemOneDown, classify, embed_emails
 import decide
 from decide import clean_email, spam_overruled
-from route_email import MANUAL, add_routing_args, ask_system_one, candidates, fast_pick, search_vector
+from route_email import MANUAL, add_routing_args, ask_system_one, candidates, fast_pick, fast_verdict, search_vector
 
 
 def main() -> None:
@@ -53,6 +53,7 @@ def main() -> None:
         verdict = {}
         if fast:
             path, got, conf = "fast", fast, None
+            verdict = fast_verdict(text, people, fast, args)
             answers = classify(text, spam_q) if spam_q else {}
         else:
             path = "llm"
@@ -70,7 +71,8 @@ def main() -> None:
         row = {**test, "got": got, "path": path, "confidence": conf, "spam_overruled": overruled,
                "system_one_choice": verdict.get("system_one_choice"), "final_pick_prob": verdict.get("final_pick_prob"),
                "second_opinion": verdict.get("second_opinion"),
-               "auto": path != "spam" and decide.safe_to_auto(path, verdict, got, args.auto_min_confidence),
+               "auto": path != "spam" and decide.safe_to_auto(path, verdict, got, args.auto_min_confidence,
+                                                              args.auto_on_agreement, args.auto_fast_min_margin),
                "agree": path == "llm" and decide.models_agree(verdict, got), "checked": bool(verdict.get("auto_check"))}
         if labeled:
             row["in_shortlist"] = test["expected"] == MANUAL or any(p["person_id"] == test["expected"] for p in people)
@@ -128,15 +130,15 @@ def main() -> None:
         if votes:
             split = sum(len(set(r["second_opinion"]["votes"].values())) > 1 for r in votes)
             print(f"  model votes:     {len(votes)} votes, models disagreed in {split}")
-    checked = [r for r in results if r["checked"]]
+    checked = [r for r in results if r["checked"] and r["path"] == "llm"]
     if checked:
         print(f"  auto checks:     asked on {len(checked)} agreed decisions, all check models agreed on "
               f"{sum(r['agree'] for r in checked)}")
     auto = [r for r in results if r["auto"]]
-    agreed = [r for r in results if r["agree"] and not r["auto"]]
-    print(f"  auto-forward:    now {len(auto)}/{total} ({sum(r['ok'] for r in auto)} right); system one + models agree "
-          f"on {len(agreed)} more ({sum(r['ok'] for r in agreed)} right) -> {len(auto) + len(agreed)}/{total} "
-          f"({sum(r['ok'] for r in auto + agreed)} right)")
+    by_path = ", ".join(f"{p} {sum(r['ok'] for r in auto if r['path'] == p)}/{sum(r['path'] == p for r in auto)}"
+                        for p in ("fast", "llm") if any(r["path"] == p for r in auto))
+    print(f"  auto-forward:    {len(auto)}/{total} ({len(auto) / total:.0%}), {sum(r['ok'] for r in auto)} right"
+          + (f" ({sum(r['ok'] for r in auto) / len(auto):.1%}; {by_path})" if auto else ""))
     missed = [r for r in results if not r["in_shortlist"]]
     print(f"Search misses:   {len(missed)} (right person not in top {args.candidates}, system one never saw them)")
 

@@ -233,3 +233,16 @@ to decide whether the email may go out without a human; they never change the de
 - Hard reworded sets: added decisions 84% right (fast path there 84-89%), so real emails should be watched at first.
 - Default now: `auto_on_agreement = true`, `auto_check_models` = Qwen3-30B + GaMS. If a check model fails, the email
   is simply not auto-forwarded.
+
+## Round 14, 2026-11-13: four fixes (`run_round14.sh`)
+- "Not for them" lines (`./run.sh suggest --contrast run.csv`, then `--apply`; `boundaries` column, shown to the
+  models, never embedded). Learned from the mistakes on one half, tested on the other: 198 -> 200 and
+  200 -> 204 of 218 (+6 of 436); Jernej 9 -> 10/16 and 6 -> 9/12. Small but positive on both halves, and the
+  lines are general ("Executive decisions, high-level approvals ... -> Jernej"). Not applied to
+  data/colleagues.csv: learning them from the test emails would fit the test. Use it on real mistakes.
+- Gemma's "nobody" only with system one's support: 0.2 neutral, 0.4 cost 30 of 1069. Off.
+- Clear matches: a bigger lead (0.10 / 0.15) drops most of them from auto-forwarding. GaMS confirming them:
+  143/144 right over the four sets (was 158/168); on the hard sets 59/60 (was 60/69). Default now
+  `auto_fast_check_models` = GaMS (~0.2 s per clear match); Qwen3-30B on top adds nothing.
+- Learning curve with the current default (seed 2): feedback on everything 408/436 (93.6%, round 11: 403),
+  294 auto-forwarded, 291 right; last 100: 71 auto-forwarded, all right. Corrections only: 402/436, 265 auto, 260 right.

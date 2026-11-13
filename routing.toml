@@ -25,12 +25,18 @@ second_opinion = "all"       # "off", "unclear" (search overruled system one, or
 second_opinion_model = "gemma-4-12b"   # several, comma-separated: majority vote, a tie goes to the first
                                        # (gemma + Qwen3-30B + GaMS: not more accurate, 880 vs 888)
 second_opinion_margin = 0.15
+second_opinion_nobody_min = 0.0  # its "nobody" counts only if system one gave nobody this much (0 = always;
+                                 # round 14: 0.2 neutral, 0.4 cost 30 of 1069)
 
 # Auto-forward: which decisions are safe without a human (route result "auto", API "auto_forward")
 auto_min_confidence = 2.0    # system one picks need this confidence (above 1 = never); set by experiments/calibration.py
 auto_check_models = "hf.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF:UD-Q4_K_XL,cjvt/GaMS3-12B-Instruct"
                              # asked only when system one and the second opinion agree; all of them must agree too
                              # for auto-forwarding (they never change the decision). Round 13: 97% right
+auto_fast_min_margin = 0.07  # a clear match is auto-forwarded only with this lead over #2 (0.07 = every fast pick;
+                             # round 14: 0.10 / 0.15 lose most clear matches for little gain)
+auto_fast_check_models = "cjvt/GaMS3-12B-Instruct"  # must also pick the clear match. Round 14: clear matches
+                             # auto-forwarded 143/144 right (was 158/168), Qwen3-30B on top adds nothing
 auto_on_agreement = true     # auto-forward system one picks that every model agreed with (gemma alone: 93%, too low)
 
 # Memory: learn from corrections (fix), confirmations (ok) and decisions two signals agreed on

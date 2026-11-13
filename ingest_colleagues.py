@@ -78,6 +78,7 @@ def load_people(path: Path) -> list[dict]:
                 **row,
                 "responsibilities": [s.strip() for s in row.get("responsibilities", "").split("|") if s.strip()],
                 "example_emails": [s.strip() for s in row.get("example_emails", "").split("|") if s.strip()],
+                "boundaries": [s.strip() for s in (row.get("boundaries") or "").split("|") if s.strip()],
             }
             for row in csv.DictReader(f)
         ]
@@ -170,6 +171,7 @@ def sync_profiles(client: QdrantClient, people: list[dict], force: bool = False)
                     "email": person["email"],
                     "role": person["role"],
                     "texts": named["lines"],
+                    "boundaries": person.get("boundaries", []),  # "not for them" lines: shown, not embedded
                     "profile_hash": profile_hash(person),
                 },
             ))

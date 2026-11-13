@@ -68,7 +68,7 @@ def main() -> None:
             outs = list(pool.map(lambda r: route(client, r["email"], args, questions=spam_q), batch))
             for row, out in zip(batch, outs):
                 got = final(out)
-                results.append({"ok": got == row["expected"], "path": out["path"]})
+                results.append({"ok": got == row["expected"], "path": out["path"], "auto": out.get("auto", False)})
                 wrong, right = got != row["expected"], got == row["expected"]
                 if (args.feedback != "none" and wrong) or (args.feedback == "all" and right):
                     text = clean_email(row["email"])
@@ -91,6 +91,10 @@ def main() -> None:
     last = results[-100:]
     print(f"memory decisions: {sum(r['ok'] for r in mem)}/{len(mem)} right")
     print(f"last 100 emails: {sum(r['path'] != 'llm' for r in last)}/{len(last)} without system one")
+    auto = [r for r in results if r["auto"]]
+    print(f"auto-forwarded: {len(auto)}/{len(results)}, {sum(r['ok'] for r in auto)} right")
+    last_auto = [r for r in last if r["auto"]]
+    print(f"last 100 auto-forwarded: {len(last_auto)}, {sum(r['ok'] for r in last_auto)} right")
     points = client.count(config.ROUTED_COLLECTION).count if client.collection_exists(config.ROUTED_COLLECTION) else 0
     print(f"memory holds {points} emails at the end")
 

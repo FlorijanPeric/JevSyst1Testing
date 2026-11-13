@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import settings  # noqa: E402
-from decide import (MANUAL, clean_email, combined_scores, fast_pick, is_nobody, is_unclear, majority,  # noqa: E402
+from decide import (MANUAL, clean_email, combined_scores, fast_pick, is_nobody, is_unclear, keep_real_person, majority,  # noqa: E402
                     memory_pick, memory_hints, models_agree, memory_votes, pick_recipient, rerank_select, safe_to_auto, select_candidates, should_learn, spam_overruled)
 
 
@@ -223,6 +223,21 @@ def test_check_models_must_agree_too():
     assert not models_agree(agreed | {"auto_check": {"qwen": None}}, "jan")  # a check that failed blocks
 
 
+def test_keep_real_person_when_system_one_saw_no_nobody():
+    probs, combined = {"jan": 0.6, "tilen": 0.3, MANUAL: 0.1}, {"jan": 0.6, "tilen": 0.4, MANUAL: 0.1}
+    assert keep_real_person(MANUAL, probs, combined, 0.3) == "jan"
+    assert keep_real_person(MANUAL, probs, combined, 0.0) == MANUAL  # off
+    assert keep_real_person(MANUAL, probs | {MANUAL: 0.4}, combined, 0.3) == MANUAL
+    assert keep_real_person("tilen", probs, combined, 0.3) == "tilen"
+
+
+def test_fast_path_auto_needs_margin_and_checks():
+    assert safe_to_auto("fast", {"fast_margin": 0.12}, "jan", 2.0, fast_min_margin=0.10)
+    assert not safe_to_auto("fast", {"fast_margin": 0.08}, "jan", 2.0, fast_min_margin=0.10)
+    assert not safe_to_auto("fast", {"fast_margin": 0.2, "auto_check": {"gams": "tilen"}}, "jan", 2.0)
+    assert safe_to_auto("fast", {"fast_margin": 0.2, "auto_check": {"gams": "jan"}}, "jan", 2.0)
+
+
 def test_majority():
     assert majority(["jan", "tilen", "tilen"]) == "tilen"
     assert majority(["jan", "tilen", "sara"]) == "jan"  # tie: first model
@@ -244,7 +259,8 @@ def test_routing_toml_has_every_setting():
                 "memory_k", "memory_min_sim", "memory_min_support", "memory_min_share", "memory_weight", "auto_learn",
                 "memory_hints", "memory_hint_min_sim", "memory_hints_per_person", "rerank", "rerank_pool",
                 "auto_min_confidence", "second_opinion", "second_opinion_model", "second_opinion_margin",
-                "auto_on_agreement", "auto_check_models", "search_summary", "search_summary_weight", "summary_model",
+                "auto_on_agreement", "auto_check_models", "auto_fast_min_margin",
+                "auto_fast_check_models", "second_opinion_nobody_min", "search_summary", "search_summary_weight", "summary_model",
                 "ranking", "nobody_candidates", "tiebreak", "cache_threshold", "clean_emails",
                 "fast_path_questions", "workers", "learned_examples_per_person"):
         assert hasattr(s, key), key

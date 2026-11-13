@@ -178,14 +178,20 @@ def rerank_select(pool: list[dict], rerank_scores: dict, k: int) -> list[dict]:
     return sorted(chosen, key=lambda p: -p["score"])
 
 
-def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float, on_agreement: bool = False) -> bool:
+def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float, on_agreement: bool = False,
+                 fast_min_margin: float = 0.0) -> bool:
     """Whether a decision is safe to forward without a human: clear matches and memory (95-100% right in
     tests), and system one picks it was at least min_confidence sure of and that search did not overrule
     (min_confidence comes from experiments/calibration.py; above 1 means never). on_agreement: also system
-    one picks that every second-opinion model agreed with (models_agree)."""
+    one picks that every second-opinion model agreed with (models_agree). A clear match needs a lead of
+    fast_min_margin, and every check model asked about it (auto_check) must agree."""
     if is_nobody(choice):
         return False
-    if path in ("fast", "memory", "cache"):
+    if path == "fast":
+        checks = verdict.get("auto_check")
+        return (verdict.get("fast_margin", 1.0) >= fast_min_margin
+                and (checks is None or all(pick == choice for pick in checks.values())))
+    if path in ("memory", "cache"):
         return True
     if path != "llm" or verdict.get("system_one_choice") != choice:
         return False
@@ -200,6 +206,20 @@ def models_agree(verdict: dict, choice: str) -> bool:
     votes = votes | (verdict.get("auto_check") or {})
     return (verdict.get("system_one_choice") == choice and bool(votes)
             and all(pick == choice for pick in votes.values()))
+
+
+def nobody_share(probs: dict) -> float:
+    """System one's summed probability for "nobody" (manual triage and nobody profiles)."""
+    return sum(v for k, v in probs.items() if is_nobody(k))
+
+
+def keep_real_person(pick: str, probs: dict, combined: dict, min_nobody: float) -> str:
+    """A second opinion of "nobody" only counts when system one also gave nobody at least min_nobody;
+    otherwise the best real person by combined score stays. min_nobody 0 = always accept."""
+    if not is_nobody(pick) or nobody_share(probs) >= min_nobody:
+        return pick
+    real = {pid: s for pid, s in combined.items() if not is_nobody(pid)}
+    return max(real, key=real.get) if real else pick
 
 
 def majority(picks: list[str | None]) -> str | None:

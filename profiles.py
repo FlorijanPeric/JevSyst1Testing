@@ -77,6 +77,7 @@ class ProfileStore:
                 "grouped_margin": grouped[pid] - max(v for k, v in grouped.items() if k != pid),
                 **{k: p["payload"][k] for k in ("name", "email", "role")},
                 "matched": [p["payload"]["texts"][i] for i in np.argsort(-line_sims)[:2]],
+                "boundaries": p["payload"].get("boundaries", []),
             })
         return people
 

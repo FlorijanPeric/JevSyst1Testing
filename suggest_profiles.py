@@ -8,6 +8,11 @@ short duty line. Suggestions are saved to data/profile_suggestions.csv.
     ./run.sh suggest                        from your corrections and confirmations (memory)
     ./run.sh suggest --labels file.csv      from any labeled file (expected,email)
     ./run.sh suggest --apply 1,3            add suggestions 1 and 3 to data/colleagues.csv (then ./run.sh load)
+    ./run.sh suggest --contrast run.csv     "not for them" lines from mistakes in a `test_routing.py --out` file
+
+Contrast lines: when emails for A keep going to B, the model writes one line for B saying which kind of email is
+A's. They go into the colleague file's `boundaries` column: shown to system one and the second opinion next to
+B's duties, but never embedded, so they don't pull those emails towards B in search.
 """
 import argparse
 import csv
@@ -34,6 +39,53 @@ These emails were also meant for {name}, but nothing in the list above describes
 Write ONE new line for the list (at most 12 words, in English, same style as the list) that covers what these
 emails have in common. Make it general enough for similar future emails, not about one specific case.
 Output only the line."""
+
+
+CONTRAST_PROMPT = """Emails meant for {a_name} ({a_role}) were wrongly sent to {b_name} ({b_role}).
+
+{b_name} handles:
+{b_duties}
+
+{a_name} handles:
+{a_duties}
+
+The wrongly sent emails:
+{emails}
+
+Write ONE line (at most 15 words, in English) for {b_name}'s profile that says which kind of email is not for
+{b_name} but for {a_name}, in the form: <kind of email> -> {a_name}. Make it general enough for similar future
+emails, not about one specific case. Output only the line."""
+
+
+def contrast(client: QdrantClient, run_csv: str, min_pair: int) -> list[dict]:
+    """One "not for them" line per (meant for A, sent to B) pair with at least min_pair mistakes."""
+    with open(run_csv, encoding="utf-8", newline="") as f:
+        wrong = [r for r in csv.DictReader(f) if r["ok"] != "True"
+                 and not is_nobody(r["expected"]) and not is_nobody(r["got"])]
+    payloads = get_store(client).payloads()
+    pairs: dict[tuple[str, str], list[str]] = {}
+    for r in wrong:
+        if r["expected"] in payloads and r["got"] in payloads:
+            pairs.setdefault((r["expected"], r["got"]), []).append(clean_email(r["email"]))
+    print(f"{len(wrong)} mistakes between two real people, {len(pairs)} pairs, "
+          f"{sum(len(v) >= min_pair for v in pairs.values())} with at least {min_pair}", flush=True)
+    llm = OpenAI(base_url=config.HIVECORE_BASE_URL, api_key=config.HIVECORE_API_KEY, timeout=90, max_retries=2)
+    out = []
+    for (a, b), emails in sorted(pairs.items(), key=lambda kv: -len(kv[1])):
+        if len(emails) < min_pair:
+            continue
+        pa, pb = payloads[a], payloads[b]
+        prompt = CONTRAST_PROMPT.format(
+            a_name=pa["name"], a_role=pa["role"], b_name=pb["name"], b_role=pb["role"],
+            a_duties="\n".join(f"- {d}" for d in duty_lines(pa)), b_duties="\n".join(f"- {d}" for d in duty_lines(pb)),
+            emails="\n".join(f'- "{" ".join(e.split())[:300]}"' for e in emails[:8]))
+        r = llm.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": prompt}],
+                                        temperature=0.2, max_tokens=60, extra_body={"reasoning_effort": "none"})
+        line = (r.choices[0].message.content or "").strip().strip('-"* ').splitlines()[0] if r.choices else ""
+        if line:
+            out.append({"id": len(out) + 1, "person_id": b, "line": line, "emails": len(emails), "kind": "boundary",
+                        "examples": " | ".join(" ".join(e.split())[:120] for e in emails[:3])})
+    return out
 
 
 def labels_from_memory(client: QdrantClient) -> list[dict]:
@@ -116,11 +168,14 @@ def apply(ids: list[int], colleagues: str, out_path: str | None = None) -> None:
     with open(colleagues, encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         fields, people = reader.fieldnames, list(reader)
+    if any(s.get("kind") == "boundary" for s in chosen) and "boundaries" not in fields:
+        fields = fields + ["boundaries"]
     for s in chosen:
+        column = "boundaries" if s.get("kind") == "boundary" else "responsibilities"
         for p in people:
             if p["id"] == s["person_id"]:
-                p["responsibilities"] = "|".join(x for x in [p["responsibilities"], s["line"]] if x)
-                print(f"  {s['person_id']}: + {s['line']}")
+                p[column] = "|".join(x for x in [p.get(column) or "", s["line"]] if x)
+                print(f"  {s['person_id']}: {'not for them' if column == 'boundaries' else '+'} {s['line']}")
     with open(out_path or colleagues, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
@@ -131,6 +186,8 @@ def apply(ids: list[int], colleagues: str, out_path: str | None = None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--labels", help="Labeled CSV (expected,email) instead of the corrections in memory")
+    parser.add_argument("--contrast", help="A test_routing.py --out CSV: suggest 'not for them' lines from its mistakes")
+    parser.add_argument("--min-pair", type=int, default=2, help="Mistakes between the same two people for a contrast line")
     parser.add_argument("--min-group", type=int, default=3, help="Similar emails needed for one suggestion")
     parser.add_argument("--group-sim", type=float, default=0.6, help="Similarity for emails to count as one group")
     parser.add_argument("--apply", help="Comma-separated suggestion numbers to add to the colleagues file")
@@ -148,16 +205,20 @@ def main() -> None:
         return
 
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
-    rows = labels_from_csv(args.labels) if args.labels else labels_from_memory(client)
-    found = suggest(client, rows, args.min_group, args.group_sim)
+    if args.contrast:
+        found = contrast(client, args.contrast, args.min_pair)
+    else:
+        rows = labels_from_csv(args.labels) if args.labels else labels_from_memory(client)
+        found = suggest(client, rows, args.min_group, args.group_sim)
     SUGGESTIONS.parent.mkdir(parents=True, exist_ok=True)
     with SUGGESTIONS.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["id", "person_id", "line", "emails", "examples"])
+        writer = csv.DictWriter(f, fieldnames=["id", "person_id", "line", "emails", "kind", "examples"])
         writer.writeheader()
         writer.writerows(found)
     print(f"\n{len(found)} suggestions (saved to {SUGGESTIONS}):")
     for s in found:
-        print(f"  {s['id']:>2}. {s['person_id']:<12} + {s['line']}   ({s['emails']} emails, e.g. {s['examples'][:90]})")
+        mark = "not for them:" if s.get("kind") == "boundary" else "+"
+        print(f"  {s['id']:>2}. {s['person_id']:<12} {mark} {s['line']}   ({s['emails']} emails, e.g. {s['examples'][:90]})")
     if found:
         print("\nAdd the good ones with: ./run.sh suggest --apply 1,3   (then ./run.sh load)")
 
