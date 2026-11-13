@@ -71,7 +71,7 @@ def main() -> None:
                "system_one_choice": verdict.get("system_one_choice"), "final_pick_prob": verdict.get("final_pick_prob"),
                "second_opinion": verdict.get("second_opinion"),
                "auto": path != "spam" and decide.safe_to_auto(path, verdict, got, args.auto_min_confidence),
-               "agree": path == "llm" and decide.models_agree(verdict, got)}
+               "agree": path == "llm" and decide.models_agree(verdict, got), "checked": bool(verdict.get("auto_check"))}
         if labeled:
             row["in_shortlist"] = test["expected"] == MANUAL or any(p["person_id"] == test["expected"] for p in people)
             row["ok"] = got == test["expected"]
@@ -128,6 +128,10 @@ def main() -> None:
         if votes:
             split = sum(len(set(r["second_opinion"]["votes"].values())) > 1 for r in votes)
             print(f"  model votes:     {len(votes)} votes, models disagreed in {split}")
+    checked = [r for r in results if r["checked"]]
+    if checked:
+        print(f"  auto checks:     asked on {len(checked)} agreed decisions, all check models agreed on "
+              f"{sum(r['agree'] for r in checked)}")
     auto = [r for r in results if r["auto"]]
     agreed = [r for r in results if r["agree"] and not r["auto"]]
     print(f"  auto-forward:    now {len(auto)}/{total} ({sum(r['ok'] for r in auto)} right); system one + models agree "

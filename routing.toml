@@ -28,8 +28,10 @@ second_opinion_margin = 0.15
 
 # Auto-forward: which decisions are safe without a human (route result "auto", API "auto_forward")
 auto_min_confidence = 2.0    # system one picks need this confidence (above 1 = never); set by experiments/calibration.py
-auto_on_agreement = false    # also system one picks every second-opinion model agreed with; with gemma alone
-                             # 93% right on normal emails (too low), with the 3-model vote 97% (see CHAT_NOTES.md)
+auto_check_models = "hf.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF:UD-Q4_K_XL,cjvt/GaMS3-12B-Instruct"
+                             # asked only when system one and the second opinion agree; all of them must agree too
+                             # for auto-forwarding (they never change the decision). Round 13: 97% right
+auto_on_agreement = true     # auto-forward system one picks that every model agreed with (gemma alone: 93%, too low)
 
 # Memory: learn from corrections (fix), confirmations (ok) and decisions two signals agreed on
 memory = true                # use similar past emails (off = round 3 behaviour)

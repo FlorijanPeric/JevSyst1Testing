@@ -143,6 +143,9 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
             if len(votes) > 1:
                 verdict["second_opinion"]["votes"] = votes
             choice = pick
+    checkers = getattr(args, "auto_check_models", "")
+    if checkers and decide.models_agree(verdict, choice):  # only worth checking what could be auto-forwarded
+        verdict["auto_check"] = second_opinions(email_text, question["criteria"], checkers, verdict)
     if getattr(args, "tiebreak", False) and not is_nobody(choice):
         choice, verdict["tiebreak"] = tiebreak(email_text, people, probs, args, choice)
     return choice, answers, verdict

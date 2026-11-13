@@ -48,6 +48,8 @@ def add_routing_args(parser: argparse.ArgumentParser, settings: SimpleNamespace 
     parser.add_argument("--second-opinion-margin", type=float, default=s.second_opinion_margin)
     parser.add_argument("--auto-min-confidence", type=float, default=s.auto_min_confidence,
                         help="System one confidence needed to auto-forward (above 1 = never)")
+    parser.add_argument("--auto-check-models", default=s.auto_check_models,
+                        help="Models that must also agree before an agreed decision is auto-forwarded")
     parser.add_argument("--auto-on-agreement", action=argparse.BooleanOptionalAction, default=s.auto_on_agreement,
                         help="Auto-forward system one picks every second-opinion model agreed with")
     parser.add_argument("--memory", action=argparse.BooleanOptionalAction, default=s.memory,

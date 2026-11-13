@@ -216,6 +216,13 @@ def test_safe_to_auto_on_agreement():
     assert not safe_to_auto("llm", agreed | {"system_one_choice": "tilen"}, "jan", 2.0, on_agreement=True)
 
 
+def test_check_models_must_agree_too():
+    agreed = {"system_one_choice": "jan", "second_opinion": {"model": "gemma", "pick": "jan", "before": "jan"}}
+    assert models_agree(agreed | {"auto_check": {"qwen": "jan", "gams": "jan"}}, "jan")
+    assert not models_agree(agreed | {"auto_check": {"qwen": "jan", "gams": "tilen"}}, "jan")
+    assert not models_agree(agreed | {"auto_check": {"qwen": None}}, "jan")  # a check that failed blocks
+
+
 def test_majority():
     assert majority(["jan", "tilen", "tilen"]) == "tilen"
     assert majority(["jan", "tilen", "sara"]) == "jan"  # tie: first model
@@ -237,7 +244,7 @@ def test_routing_toml_has_every_setting():
                 "memory_k", "memory_min_sim", "memory_min_support", "memory_min_share", "memory_weight", "auto_learn",
                 "memory_hints", "memory_hint_min_sim", "memory_hints_per_person", "rerank", "rerank_pool",
                 "auto_min_confidence", "second_opinion", "second_opinion_model", "second_opinion_margin",
-                "auto_on_agreement", "search_summary", "search_summary_weight", "summary_model",
+                "auto_on_agreement", "auto_check_models", "search_summary", "search_summary_weight", "summary_model",
                 "ranking", "nobody_candidates", "tiebreak", "cache_threshold", "clean_emails",
                 "fast_path_questions", "workers", "learned_examples_per_person"):
         assert hasattr(s, key), key

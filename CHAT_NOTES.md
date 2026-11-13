@@ -215,3 +215,21 @@ come from emails the router got wrong, so they are hard).
   (gemma) and 82-88% (vote), but the fast path itself is only 84-89% there. Agreement with gemma alone is not safe
   enough; the 3-model vote is as good as the fast path but costs a Qwen3-30B call (6-8 s) per email.
   `auto_on_agreement` stays off; a next step could use the extra voters only to check, gemma deciding.
+
+## Round 13, 2026-11-13: check models for auto-forwarding (`run_round13.sh`)
+Gemma decides (every system one decision). When system one and gemma agree, Qwen3-30B and GaMS are asked too, only
+to decide whether the email may go out without a human; they never change the decision, so accuracy stays
+101 / 297 / 240 / 250. Auto-forward on handwritten + generated (436 emails), fast path included:
+
+| check models | auto-forwarded | right | agreed decisions added | right |
+|---|---|---|---|---|
+| none (gemma only) | 314 (72%) | 96.2% | 215 | 93% |
+| **Qwen3-30B + GaMS** | **272 (62%)** | **97.8%** | **174** | **97%** |
+| Qwen3-30B | 292 (67%) | 97.3% | 193 | 96% |
+| GaMS | 280 (64%) | 96.8% | 181 | 96% |
+
+- Fresh (nothing cached): 279 of 436 auto-forwarded, 271 right (97.1%); added decisions 173/180 (96%).
+  106 emails in 61 s and 330 in 75 s with 3 in parallel: about 0.2-0.6 s per email, Qwen3-30B was fast that day.
+- Hard reworded sets: added decisions 84% right (fast path there 84-89%), so real emails should be watched at first.
+- Default now: `auto_on_agreement = true`, `auto_check_models` = Qwen3-30B + GaMS. If a check model fails, the email
+  is simply not auto-forwarded.

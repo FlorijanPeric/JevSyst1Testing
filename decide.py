@@ -193,9 +193,11 @@ def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float, o
 
 
 def models_agree(verdict: dict, choice: str) -> bool:
-    """System one and every second-opinion model picked `choice`."""
+    """System one and every second-opinion model picked `choice`, and so did every check model asked
+    (auto_check: models that only confirm a decision for auto-forwarding, they never change it)."""
     second = verdict.get("second_opinion") or {}
     votes = second.get("votes") or ({second.get("model"): second.get("pick")} if second else {})
+    votes = votes | (verdict.get("auto_check") or {})
     return (verdict.get("system_one_choice") == choice and bool(votes)
             and all(pick == choice for pick in votes.values()))
 
