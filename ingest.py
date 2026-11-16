@@ -22,10 +22,14 @@ def department_for(path: Path, override: str | None) -> str:
 def ensure_collection(client: QdrantClient, name: str, vector_size: int) -> None:
     if client.collection_exists(name):
         return
-    client.create_collection(
-        collection_name=name,
-        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-    )
+    try:
+        client.create_collection(
+            collection_name=name,
+            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+        )
+    except Exception:  # created by another thread or process in the meantime (409)
+        if not client.collection_exists(name):
+            raise
 
 
 def main() -> None:

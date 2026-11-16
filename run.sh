@@ -18,6 +18,7 @@
 #   ./run.sh unit                unit tests of the decision logic (no network)
 #   ./run.sh suggest [--apply 1,3]   new profile lines learned from corrections (you approve them)
 #   ./run.sh suggest --contrast run.csv   "not for them" lines from the mistakes in a test run (then --apply)
+#   ./run.sh shadow inbox.csv     route real emails, log them, forward nothing (also --review, --report)
 #   ./run.sh calibrate a.csv ...     system one accuracy per confidence (CSV from: ./run.sh test FILE --out a.csv)
 # Settings: routing.toml. Colleagues: data/colleagues.csv + data/nobody_profiles.csv + learned corrections.
 set -euo pipefail
@@ -65,6 +66,10 @@ case "${1:-}" in
   suggest)
     shift
     python suggest_profiles.py "$@"
+    ;;
+  shadow)
+    shift
+    python shadow.py "$@"
     ;;
   calibrate)
     shift

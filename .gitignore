@@ -25,3 +25,5 @@ final/
 round*/
 *.log
 data/profile_suggestions.csv
+data/shadow_reviews.jsonl
+data/shadow_run.csv

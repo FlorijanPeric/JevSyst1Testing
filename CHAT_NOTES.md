@@ -246,3 +246,24 @@ to decide whether the email may go out without a human; they never change the de
   `auto_fast_check_models` = GaMS (~0.2 s per clear match); Qwen3-30B on top adds nothing.
 - Learning curve with the current default (seed 2): feedback on everything 408/436 (93.6%, round 11: 403),
   294 auto-forwarded, 291 right; last 100: 71 auto-forwarded, all right. Corrections only: 402/436, 265 auto, 260 right.
+
+## Round 15, 2026-11-13: what gemma sees, reasoning, shadow mode (`run_round15.sh`)
+Right of 1069 (handwritten / generated / reworded Qwen / reworded Gemma+GaMS):
+
+| setup | total | per set |
+|---|---|---|
+| default (gemma, 5 candidates, id only) | 888 | 101 / 297 / 240 / 250 |
+| full profiles (every duty line) | 866 | 103 / 292 / 233 / 238 |
+| **8 candidates for gemma** | **896** | 101 / **300** / **242** / **253** |
+| 8 candidates + full profiles | 869 | 103 / 291 / 236 / 239 |
+| one sentence of reasoning first | 889 | 102 / 298 / 239 / 250 |
+| thinking on ("low") | 676 | 88 / 264 / 164 / 160, 5x slower |
+
+- Default now `second_opinion_candidates = 8`: the right person was only in the longer list for 37 system one
+  decisions (mostly reworded emails); auto-forward precision unchanged.
+- Full profiles help on the handwritten set but hurt elsewhere: more text, more ways to be distracted.
+- Thinking makes gemma worse at this (it talks itself out of the obvious pick).
+- Shadow mode (`./run.sh shadow`, `--review`, `--report`) end to end on the test emails as a fake inbox, reviews
+  answered from the labels: week 1 (handwritten) 101/106, 63 of 64 auto-forwards right; after week 2 (generated)
+  394/436 (90%), 254 auto-forwards, 247 right (97%). Second run routes nothing new. Fixed a crash when two threads
+  created the memory collection at once (ingest.ensure_collection).

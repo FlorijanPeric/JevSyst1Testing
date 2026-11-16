@@ -260,7 +260,8 @@ def test_routing_toml_has_every_setting():
                 "memory_hints", "memory_hint_min_sim", "memory_hints_per_person", "rerank", "rerank_pool",
                 "auto_min_confidence", "second_opinion", "second_opinion_model", "second_opinion_margin",
                 "auto_on_agreement", "auto_check_models", "auto_fast_min_margin",
-                "auto_fast_check_models", "second_opinion_nobody_min", "search_summary", "search_summary_weight", "summary_model",
+                "auto_fast_check_models", "second_opinion_nobody_min",
+                "second_opinion_full_profiles", "second_opinion_candidates", "second_opinion_reasoning", "search_summary", "search_summary_weight", "summary_model",
                 "ranking", "nobody_candidates", "tiebreak", "cache_threshold", "clean_emails",
                 "fast_path_questions", "workers", "learned_examples_per_person"):
         assert hasattr(s, key), key

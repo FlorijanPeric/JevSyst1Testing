@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -141,30 +142,45 @@ Options:
 {options}"""
 
 
-def ask_model_choice(model: str, email: str, criteria: dict) -> str | None:
+REASON_SUFFIX = """
+
+First write one short sentence on why, then on a new line: Answer: <id>"""
+
+
+def ask_model_choice(model: str, email: str, criteria: dict, reasoning: str = "none") -> str | None:
     """A bigger chat model picks one id from the same options system one saw ("second opinion").
 
     Returns the id, or None if the answer is not one of the ids. reasoning_effort "none" turns off thinking
     (qwen3.6 otherwise spent 300+ tokens thinking and answered nothing); the other models accept it too.
-    Cached on disk by (model, email, options), unless CACHE_SYSTEMONE=0."""
-    key = _cache.key("so", model, email, criteria) if _cache is not None and config.CACHE_SYSTEMONE else None
+    reasoning: "none" answers with the id only; "brief" asks for one sentence of reasoning first; "low" turns
+    the model's own thinking on at a low effort. Cached on disk by (model, email, options), unless
+    CACHE_SYSTEMONE=0."""
+    parts = ("so", model, email, criteria) + ((reasoning,) if reasoning != "none" else ())
+    key = _cache.key(*parts) if _cache is not None and config.CACHE_SYSTEMONE else None
     cached = _cache.get(key) if key else None
     if cached is not None:
         return cached or None
     options = "\n".join(f"{pid}: {desc}" for pid, desc in criteria.items())
     prompt = CHOICE_PROMPT.format(email=" ".join(email.split())[:3000], options=options)
+    if reasoning == "brief":
+        prompt = prompt.replace("Answer with the id only.", "") + REASON_SUFFIX
+    max_tokens = {"none": 20, "brief": 120}.get(reasoning, 800)
     for attempt in range(3):
         try:
             resp = _openai_client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}], temperature=0, max_tokens=20,
-                extra_body={"reasoning_effort": "none"})
+                model=model, messages=[{"role": "user", "content": prompt}], temperature=0, max_tokens=max_tokens,
+                extra_body={"reasoning_effort": "low" if reasoning == "low" else "none"})
             break
         except Exception:
             if attempt == 2:
                 raise
             time.sleep(3 * (attempt + 1))
-    answer = (resp.choices[0].message.content or "").strip().strip("`'\".*").lower()
-    pick = answer if answer in criteria else next((pid for pid in criteria if pid in answer.split()), None)
+    answer = (resp.choices[0].message.content or "").strip().lower()
+    if "answer:" in answer:
+        answer = answer.rsplit("answer:", 1)[1]
+    answer = answer.strip().strip("`'\".*").strip()
+    words = re.findall(r"[a-z0-9_]+", answer)
+    pick = answer if answer in criteria else next((w for w in words if w in criteria), None)
     if key:
         _cache.put(key, pick or "")
     return pick

@@ -79,13 +79,15 @@ def recall(client: QdrantClient, vector: list[float], k: int) -> list:
     return client.query_points(collection_name=config.ROUTED_COLLECTION, query=vector, limit=max(k, 1)).points
 
 
-def recipient_question(people: list[dict], hints: dict | None = None) -> dict:
+def recipient_question(people: list[dict], hints: dict | None = None, full: bool = False) -> dict:
     # Name + role + the two best-matching lines. Shorter role-and-duties descriptions were tried
     # (2026-10-23): same accuracy, but they caught only half as many emails that belong to nobody.
     # hints: similar past emails you corrected or confirmed (decide.memory_hints), shown as examples.
+    # full: every duty line instead of the two best-matching ones (for the second opinion, a bigger model).
     hints = hints or {}
     quote = lambda texts: "; ".join(f'"{" ".join(t.split())[:200]}"' for t in texts)
-    criteria = {p["person_id"]: f"{p['name']}, {p['role']}. Handles: {'; '.join(p['matched'])}"
+    duties = lambda p: [d for d in p.get("duties", []) if d] if full and p.get("duties") else p["matched"]
+    criteria = {p["person_id"]: f"{p['name']}, {p['role']}. Handles: {'; '.join(duties(p))}"
                 + (f". Not for them: {'; '.join(p['boundaries'])}" if p.get("boundaries") else "")
                 + (f". Similar past emails that went to them: {quote(hints[p['person_id']])}" if p["person_id"] in hints else "")
                 for p in people}
@@ -108,12 +110,14 @@ def pick_recipient(probs: dict, people: list[dict], args, prior: dict | None = N
 
 
 def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
-                   prior: dict | None = None, hints: dict | None = None) -> tuple[str, dict, dict]:
+                   prior: dict | None = None, hints: dict | None = None,
+                   wide: list[dict] | None = None) -> tuple[str, dict, dict]:
     """Ask system one for the recipient (plus any extra questions) and pick one.
 
     Each candidate gets P(system one) + search_weight * (search score - best search score);
     "nobody" options are summed and win at manual_threshold (decide.py). prior: memory vote shares,
     weighted by memory_weight. hints: past corrected emails shown to system one as examples.
+    wide: the (possibly longer) candidate list the second opinion chooses from (second_opinion_people).
 
     Returns (final pick, answers to extra questions, verdict). The verdict holds
     system one's own pick, its confidence in that pick, and the probability it
@@ -137,7 +141,9 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
     mode = getattr(args, "second_opinion", "off")
     if mode != "off" and people and (mode == "all" or decide.is_unclear(
             verdict, choice, combined_scores(probs, people, args, prior), args.second_opinion_margin)):
-        votes = second_opinions(email_text, question["criteria"], args.second_opinion_model, verdict)
+        so_criteria = recipient_question(wide or people, hints, getattr(args, "second_opinion_full_profiles", False))["criteria"]
+        votes = second_opinions(email_text, so_criteria, args.second_opinion_model, verdict,
+                                getattr(args, "second_opinion_reasoning", "none"))
         pick = decide.majority(list(votes.values()))
         if pick and is_nobody(pick):  # "nobody" only when system one also leaned that way
             pick = decide.keep_real_person(pick, probs, combined_scores(probs, people, args, prior),
@@ -155,14 +161,14 @@ def ask_system_one(email_text: str, people: list[dict], questions: dict, args,
     return choice, answers, verdict
 
 
-def second_opinions(email_text: str, criteria: dict, models: str, verdict: dict) -> dict:
+def second_opinions(email_text: str, criteria: dict, models: str, verdict: dict, reasoning: str = "none") -> dict:
     """Each model in the comma-separated list picks an id ({model: pick}, MANUAL for nobody, None if it gave
     no valid id). A model that fails is noted in the verdict; the others still vote."""
     names = [m.strip() for m in models.split(",") if m.strip()]
 
     def ask(model: str) -> str | None:
         try:
-            pick = ask_model_choice(model, email_text, criteria)
+            pick = ask_model_choice(model, email_text, criteria, reasoning)
         except Exception as e:  # bigger model unavailable: the others (or system one) decide
             verdict.setdefault("second_opinion_error", {})[model] = str(e)[:120]
             return None
@@ -172,6 +178,17 @@ def second_opinions(email_text: str, criteria: dict, models: str, verdict: dict)
         return {names[0]: ask(names[0])}
     with ThreadPoolExecutor(max_workers=len(names)) as pool:
         return dict(zip(names, pool.map(ask, names)))
+
+
+def second_opinion_people(client: QdrantClient, vector: list[float], people: list[dict], args) -> list[dict]:
+    """The candidates the second opinion chooses from: system one's, plus more from search when
+    second_opinion_candidates is larger than `candidates` (0 = the same list)."""
+    k = getattr(args, "second_opinion_candidates", 0)
+    if k <= args.candidates:
+        return people
+    seen = {p["person_id"] for p in people}
+    extra = shortlist(client, vector, k, args.ranking, args.nobody_candidates)
+    return people + [p for p in extra if p["person_id"] not in seen]
 
 
 def fast_verdict(text: str, people: list[dict], choice: str, args) -> dict:
@@ -312,7 +329,8 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
                 hints = decide.memory_hints([n + (h.payload.get("text", ""),) for n, h in zip(neighbors, hits)],
                                             args.memory_hint_min_sim, args.memory_hints_per_person)
 
-    people = candidates(client, text, search_vector(text, vector, args), args)
+    search = search_vector(text, vector, args)
+    people = candidates(client, text, search, args)
     timer.mark("search")
     prior = decide.memory_votes(neighbors, args.memory_min_sim) if use_memory else {}
 
@@ -330,7 +348,8 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
     else:
         path = "llm"
         try:
-            choice, answers, verdict = ask_system_one(text, people, questions, args, prior, hints)
+            choice, answers, verdict = ask_system_one(text, people, questions, args, prior, hints,
+                                                      second_opinion_people(client, search, people, args))
         except SystemOneDown as e:
             # Fallback: best search match (nobody profile -> manual), clearly marked in output and log.
             path, answers = "search-only", {}

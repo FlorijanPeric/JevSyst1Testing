@@ -78,6 +78,7 @@ class ProfileStore:
                 **{k: p["payload"][k] for k in ("name", "email", "role")},
                 "matched": [p["payload"]["texts"][i] for i in np.argsort(-line_sims)[:2]],
                 "boundaries": p["payload"].get("boundaries", []),
+                "duties": [t.split(": ", 1)[-1] for t in p["payload"]["texts"] if " handles emails like: " not in t],
             })
         return people
 

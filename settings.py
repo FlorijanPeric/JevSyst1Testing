@@ -46,6 +46,11 @@ def add_routing_args(parser: argparse.ArgumentParser, settings: SimpleNamespace 
     parser.add_argument("--second-opinion-model", default=s.second_opinion_model,
                         help="Model(s), comma-separated; several = majority vote")
     parser.add_argument("--second-opinion-margin", type=float, default=s.second_opinion_margin)
+    parser.add_argument("--second-opinion-full-profiles", action=argparse.BooleanOptionalAction,
+                        default=s.second_opinion_full_profiles, help="Show the second opinion every duty line")
+    parser.add_argument("--second-opinion-candidates", type=int, default=s.second_opinion_candidates,
+                        help="People the second opinion chooses from (0 = same as system one)")
+    parser.add_argument("--second-opinion-reasoning", choices=["none", "brief", "low"], default=s.second_opinion_reasoning)
     parser.add_argument("--second-opinion-nobody-min", type=float, default=s.second_opinion_nobody_min,
                         help="The second opinion's 'nobody' counts only if system one gave nobody this much")
     parser.add_argument("--auto-min-confidence", type=float, default=s.auto_min_confidence,

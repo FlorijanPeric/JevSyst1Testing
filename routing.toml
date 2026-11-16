@@ -25,6 +25,11 @@ second_opinion = "all"       # "off", "unclear" (search overruled system one, or
 second_opinion_model = "gemma-4-12b"   # several, comma-separated: majority vote, a tie goes to the first
                                        # (gemma + Qwen3-30B + GaMS: not more accurate, 880 vs 888)
 second_opinion_margin = 0.15
+second_opinion_full_profiles = false  # every duty line, not just the two best-matching (round 15: 866 vs 888 of 1069)
+second_opinion_candidates = 8         # people it chooses from; more than `candidates` = a longer list (0 = same).
+                                      # Round 15: 896 vs 888 of 1069, same auto-forward precision
+second_opinion_reasoning = "none"     # "none" (id only), "brief" (one sentence first: 889, slower), "low" (thinking
+                                      # on: 676, and 5x slower)
 second_opinion_nobody_min = 0.0  # its "nobody" counts only if system one gave nobody this much (0 = always;
                                  # round 14: 0.2 neutral, 0.4 cost 30 of 1069)
 

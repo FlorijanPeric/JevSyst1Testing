@@ -21,7 +21,7 @@ import config
 from clients import SystemOneDown, classify, embed_emails
 import decide
 from decide import clean_email, spam_overruled
-from route_email import MANUAL, add_routing_args, ask_system_one, candidates, fast_pick, fast_verdict, search_vector
+from route_email import MANUAL, add_routing_args, ask_system_one, candidates, fast_pick, fast_verdict, search_vector, second_opinion_people
 
 
 def main() -> None:
@@ -48,7 +48,8 @@ def main() -> None:
 
     def run_one(i: int) -> dict:
         test, text, vector = tests[i], texts[i], vectors[i]
-        people = candidates(client, text, search_vector(text, vector, args), args)
+        search = search_vector(text, vector, args)
+        people = candidates(client, text, search, args)
         fast = fast_pick(people, args.min_score, args.min_margin)
         verdict = {}
         if fast:
@@ -58,7 +59,8 @@ def main() -> None:
         else:
             path = "llm"
             try:
-                got, answers, verdict = ask_system_one(text, people, spam_q, args)
+                got, answers, verdict = ask_system_one(text, people, spam_q, args,
+                                                       wide=second_opinion_people(client, search, people, args))
                 conf = verdict["confidence"]
             except SystemOneDown:  # as in routing: best search match, counted as its own path
                 path, answers, conf = "search-only", {}, None
@@ -76,6 +78,9 @@ def main() -> None:
                "agree": path == "llm" and decide.models_agree(verdict, got), "checked": bool(verdict.get("auto_check"))}
         if labeled:
             row["in_shortlist"] = test["expected"] == MANUAL or any(p["person_id"] == test["expected"] for p in people)
+            if args.second_opinion_candidates > args.candidates and path == "llm":
+                wide = second_opinion_people(client, search, people, args)
+                row["in_wide"] = test["expected"] == MANUAL or any(p["person_id"] == test["expected"] for p in wide)
             row["ok"] = got == test["expected"]
         return row
 
@@ -139,6 +144,10 @@ def main() -> None:
                         for p in ("fast", "llm") if any(r["path"] == p for r in auto))
     print(f"  auto-forward:    {len(auto)}/{total} ({len(auto) / total:.0%}), {sum(r['ok'] for r in auto)} right"
           + (f" ({sum(r['ok'] for r in auto) / len(auto):.1%}; {by_path})" if auto else ""))
+    if any("in_wide" in r for r in results):
+        print(f"  wider list:      right person among the second opinion's candidates for "
+              f"{sum(r.get('in_wide', False) for r in results if 'in_wide' in r)} of {sum('in_wide' in r for r in results)}"
+              f" system one decisions ({sum(r['in_shortlist'] for r in results if 'in_wide' in r)} in system one's list)")
     missed = [r for r in results if not r["in_shortlist"]]
     print(f"Search misses:   {len(missed)} (right person not in top {args.candidates}, system one never saw them)")
 
