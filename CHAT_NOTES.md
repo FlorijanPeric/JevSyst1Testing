@@ -325,3 +325,19 @@ Baseline (default) 896 of 1069, 41 wrong auto-forwards (1 / 5 / 13 / 22).
   hard sets: off 354 auto, 348 right; 90% held back 70 (2 wrong); 80% held back 29 (2 wrong).
   With memory and feedback the auto-forwards are already ~98% right, so it costs far more than it saves. Off;
   it stays as a safety net for real use (a person whose profile breaks suddenly).
+
+## Round 18, 2026-11-23: "not for them" lines added to data/colleagues.csv
+Learned from the mistakes on all four sets (16 lines, all general, e.g. "Executive decisions, leadership approvals,
+and high-level strategic directions -> Jernej" on Sara, Nina, Eva, Tina, Petra; "Web development and website bug
+reports -> Tilen" on Jan). Old file kept as data/colleagues.before_round18.csv (on 125 and locally).
+
+| set | before | after | wrong auto-forwards before -> after |
+|---|---|---|---|
+| handwritten | 101/106 | 105/106 | 1 -> 0 |
+| generated | 300/330 | 302/330 | 5 -> 3 |
+| reworded Qwen | 242/314 | 251/314 | 13 -> 11 |
+| reworded Gemma+GaMS | 253/319 | 268/319 | 22 -> 10 |
+| **total** | **896** | **926** | **41 -> 24** |
+
+Jernej 8/8, 14/20, 21/45, 28/45. These numbers are optimistic from now on (the lines were learned from these
+emails); the honest gain is round 17's held-out +31 of 1069. Compare future rounds against 926.
