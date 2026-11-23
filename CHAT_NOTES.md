@@ -267,3 +267,33 @@ Right of 1069 (handwritten / generated / reworded Qwen / reworded Gemma+GaMS):
   answered from the labels: week 1 (handwritten) 101/106, 63 of 64 auto-forwards right; after week 2 (generated)
   394/436 (90%), 254 auto-forwards, 247 right (97%). Second run routes nothing new. Fixed a crash when two threads
   created the memory collection at once (ingest.ensure_collection).
+
+## Round 16, 2026-11-16/18: DeepSeek as the second opinion, and is it faster? (`run_round16.sh`, `run_round16b.sh`)
+DeepSeek-V4.1-Flash is on hivecore now, limited to 2 requests at once: routing.toml `[model_limits]`, enforced in
+`clients._chat` for every thread of a process (8 threads -> never more than 2 in flight).
+
+Right of 1069 (handwritten / generated / reworded Qwen / reworded Gemma+GaMS):
+
+| setup | total | per set |
+|---|---|---|
+| **gemma, 8 candidates (default)** | **896** | 101 / 300 / 242 / 253 |
+| DeepSeek, 8 candidates, id only | 892 | 103 / 290 / 251 / 248 |
+| DeepSeek, full profiles | 874 | 102 / 295 / 240 / 237 |
+| DeepSeek, full profiles, 5 candidates | 873 | 102 / 295 / 239 / 237 |
+| DeepSeek, full profiles + one sentence of reasoning | 864 | 102 / 294 / 233 / 235 |
+
+- Full profiles hurt DeepSeek too (-18), like gemma in round 15. Idea dropped.
+- Speed, measured with fresh answers (`CACHE_SECOND_OPINION=0`; system one stays cached):
+
+| | right | wrong auto-forwards | per email (3 at once) | second opinion median / p95 |
+|---|---|---|---|---|
+| gemma | 896 (second run 897) | 43 | 0.16-0.18 s | 0.27-0.36 s / 0.48-0.69 s |
+| DeepSeek | 896 (first run 892) | 42 | 0.14-0.15 s | 0.17-0.24 s / 0.27-0.35 s |
+
+- DeepSeek answers ~0.1 s faster (p95 half of gemma's); the 2-request limit cost 29 s of waiting over 900 calls.
+  End to end ~15% faster per email, same quality, but its answers vary between runs (892 vs 896; gemma 896/897).
+- Kept gemma as the default: same quality, repeatable, no request limit. DeepSeek is one setting away
+  (`second_opinion_model = "DeepSeek-V4.1-Flash"`) if speed matters more.
+- The check models: Qwen3-30B ~0.2-0.25 s and GaMS ~0.3 s per answer (one 21 s Qwen answer was a cold start).
+- New metric in every `test_routing.py` run: `model time` (calls, median, p95, waiting for a free slot per model)
+  and `score` (right, wrong auto-forwards, seconds per email).

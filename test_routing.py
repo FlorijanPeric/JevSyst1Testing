@@ -18,7 +18,7 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 
 import config
-from clients import SystemOneDown, classify, embed_emails
+from clients import SystemOneDown, classify, embed_emails, model_timings
 import decide
 from decide import clean_email, spam_overruled
 from route_email import MANUAL, add_routing_args, ask_system_one, candidates, fast_pick, fast_verdict, search_vector, second_opinion_people
@@ -112,7 +112,8 @@ def main() -> None:
 
     total = len(results)
     correct = sum(r["ok"] for r in results)
-    print(f"\nAccuracy:        {correct}/{total} ({correct / total:.0%})  in {time.perf_counter() - start:.0f}s")
+    elapsed = time.perf_counter() - start
+    print(f"\nAccuracy:        {correct}/{total} ({correct / total:.0%})  in {elapsed:.0f}s")
     for path in ("fast", "llm", "spam", "search-only"):
         rows = [r for r in results if r["path"] == path]
         if rows:
@@ -148,6 +149,11 @@ def main() -> None:
         print(f"  wider list:      right person among the second opinion's candidates for "
               f"{sum(r.get('in_wide', False) for r in results if 'in_wide' in r)} of {sum('in_wide' in r for r in results)}"
               f" system one decisions ({sum(r['in_shortlist'] for r in results if 'in_wide' in r)} in system one's list)")
+    for model, t in sorted(model_timings().items()):
+        print(f"  model time:      {model.split('/')[-1][:28]:<28} {t['calls']:>4} calls, median {t['median']:.2f}s, "
+              f"p95 {t['p95']:.2f}s, waited for a free slot {t['waited']:.0f}s in total")
+    print(f"  score:           right {correct}/{total}, wrong auto-forwards {sum(not r['ok'] for r in auto)}, "
+          f"{elapsed / total:.2f}s per email ({args.workers} at once)")
     missed = [r for r in results if not r["in_shortlist"]]
     print(f"Search misses:   {len(missed)} (right person not in top {args.candidates}, system one never saw them)")
 

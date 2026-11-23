@@ -47,6 +47,7 @@ NOBODY_PROFILES = os.environ.get("NOBODY_PROFILES", "data/nobody_profiles.csv")
 # Saves the slowest calls for repeats and makes test runs comparable. Empty = off.
 CACHE_DB = os.environ.get("CACHE_DB", "data/cache.sqlite")
 CACHE_SYSTEMONE = os.environ.get("CACHE_SYSTEMONE", "1") != "0"  # 0: always ask system one and the second opinion (embeddings stay cached)
+CACHE_SECOND_OPINION = os.environ.get("CACHE_SECOND_OPINION", "1") != "0"  # 0: second opinion and check models always answer fresh (for timing)
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None

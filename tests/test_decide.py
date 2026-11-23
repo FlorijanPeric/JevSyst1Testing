@@ -265,5 +265,6 @@ def test_routing_toml_has_every_setting():
                 "ranking", "nobody_candidates", "tiebreak", "cache_threshold", "clean_emails",
                 "fast_path_questions", "workers", "learned_examples_per_person"):
         assert hasattr(s, key), key
+    assert s.model_limits.get("DeepSeek-V4.1-Flash", 0) <= 2  # DeepSeek allows at most 2 requests at once
     assert s.ranking in ("window", "grouped") and s.nobody_candidates in ("ranked", "always")
     assert 0 < s.manual_threshold <= 1 and 0 < s.spam_threshold <= 1

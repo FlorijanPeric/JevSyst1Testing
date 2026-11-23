@@ -42,6 +42,51 @@ _cache = _DiskCache(config.CACHE_DB) if config.CACHE_DB else None
 
 _openai_client = OpenAI(base_url=config.HIVECORE_BASE_URL, api_key=config.HIVECORE_API_KEY)
 
+_slots: dict[str, threading.BoundedSemaphore] = {}
+_slots_lock = threading.Lock()
+
+
+def _model_slot(model: str) -> threading.BoundedSemaphore | None:
+    """At most N requests at once to a model listed in routing.toml [model_limits] (e.g. DeepSeek allows 2),
+    shared by every thread of this process. None = no limit."""
+    with _slots_lock:
+        if model not in _slots:
+            import settings  # here, not at the top: settings is optional for scripts that only embed
+            limit = (getattr(settings.load(), "model_limits", {}) or {}).get(model)
+            _slots[model] = threading.BoundedSemaphore(int(limit)) if limit else None
+        return _slots[model]
+
+
+_timings: dict[str, list[tuple[float, float]]] = {}  # model -> [(seconds waiting for a slot, seconds answering)]
+
+
+def _chat(model: str, **kwargs):
+    slot = _model_slot(model)
+    queued = time.perf_counter()
+    if slot is not None:
+        slot.acquire()
+    try:
+        started = time.perf_counter()
+        resp = _openai_client.chat.completions.create(model=model, **kwargs)
+        with _slots_lock:
+            _timings.setdefault(model, []).append((started - queued, time.perf_counter() - started))
+        return resp
+    finally:
+        if slot is not None:
+            slot.release()
+
+
+def model_timings() -> dict[str, dict]:
+    """Per chat model in this process: calls, median and p95 answer time, total waiting for a free slot."""
+    out = {}
+    with _slots_lock:
+        items = {m: list(t) for m, t in _timings.items()}
+    for model, t in items.items():
+        answer = sorted(a for _, a in t)
+        out[model] = {"calls": len(t), "median": answer[len(answer) // 2], "p95": answer[int(len(answer) * 0.95)],
+                      "total": sum(answer), "waited": sum(w for w, _ in t)}
+    return out
+
 # Reused session keeps the TLS connection to hivecore alive between calls.
 _session = requests.Session()
 _session.headers["Authorization"] = f"Bearer {config.HIVECORE_API_KEY}"
@@ -156,7 +201,7 @@ def ask_model_choice(model: str, email: str, criteria: dict, reasoning: str = "n
     the model's own thinking on at a low effort. Cached on disk by (model, email, options), unless
     CACHE_SYSTEMONE=0."""
     parts = ("so", model, email, criteria) + ((reasoning,) if reasoning != "none" else ())
-    key = _cache.key(*parts) if _cache is not None and config.CACHE_SYSTEMONE else None
+    key = _cache.key(*parts) if _cache is not None and config.CACHE_SYSTEMONE and config.CACHE_SECOND_OPINION else None
     cached = _cache.get(key) if key else None
     if cached is not None:
         return cached or None
@@ -167,8 +212,8 @@ def ask_model_choice(model: str, email: str, criteria: dict, reasoning: str = "n
     max_tokens = {"none": 20, "brief": 120}.get(reasoning, 800)
     for attempt in range(3):
         try:
-            resp = _openai_client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}], temperature=0, max_tokens=max_tokens,
+            resp = _chat(
+                model, messages=[{"role": "user", "content": prompt}], temperature=0, max_tokens=max_tokens,
                 extra_body={"reasoning_effort": "low" if reasoning == "low" else "none"})
             break
         except Exception:
@@ -202,8 +247,8 @@ def summarize_request(model: str, email: str) -> str:
         return cached
     for attempt in range(3):
         try:
-            resp = _openai_client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": SUMMARY_PROMPT.format(email=" ".join(email.split())[:3000])}],
+            resp = _chat(
+                model, messages=[{"role": "user", "content": SUMMARY_PROMPT.format(email=" ".join(email.split())[:3000])}],
                 temperature=0, max_tokens=60, extra_body={"reasoning_effort": "none"})
             break
         except Exception:

@@ -67,3 +67,7 @@ clean_emails = true                # strip quoted replies, signatures and footer
 fast_path_questions = ["spam"]     # questions still asked when the fast path skips system one
 workers = 3                        # parallel emails in test and inbox runs (hivecore rate-limits above ~4)
 learned_examples_per_person = 20   # newest corrections added to a profile by `fix`
+
+# Requests at once per model, for every thread of a process (models not listed: no limit)
+[model_limits]
+"DeepSeek-V4.1-Flash" = 2
