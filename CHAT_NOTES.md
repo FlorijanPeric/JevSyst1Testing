@@ -341,3 +341,25 @@ reports -> Tilen" on Jan). Old file kept as data/colleagues.before_round18.csv (
 
 Jernej 8/8, 14/20, 21/45, 28/45. These numbers are optimistic from now on (the lines were learned from these
 emails); the honest gain is round 17's held-out +31 of 1069. Compare future rounds against 926.
+
+## Round 19, 2026-11-23: second set of lines, auto-forward rules (`run_round19.sh`)
+Baseline with the round 18 profiles: 926 of 1069, 453 auto-forwarded (42%), 24 wrong (94.7%). The lines made the
+check models more careful: round 16/17 had 502 auto-forwards with 41 wrong.
+
+- **Second set of "not for them" lines**, learned from what is still wrong on one half, tested on the other:
+  half 2 449 -> 458, half 1 477 -> 483 (+15 of 1069); wrong auto-forwards 13 -> 14 and 11 -> 3; Ana 25 -> 29 of 31.
+  Smaller than the first set (+31) but still positive on both halves.
+- **Auto-forward rules** (`experiments/auto_tradeoff.py`, decisions saved with `test_routing.py --jsonl`):
+
+  | rule | auto-forwarded | wrong | right |
+  |---|---|---|---|
+  | **today: second opinion + every check model** | **453 (42%)** | **24** | **94.7%** |
+  | second opinion + at least one check model | 507 (47%) | 40 | 92.1% |
+  | second opinion only | 517 (48%) | 46 | 91.1% |
+  | today + system one confidence >= 0.5 | 252 (24%) | 10 | 96.0% |
+  | today + system one confidence >= 0.6 | 193 (18%) | 1 | 99.5% |
+  | today + system one confidence >= 0.7 | 168 (16%) | 0 | 100% |
+
+  No looser rule adds auto-forwards without adding wrong ones at the same rate, and confidence never finds new
+  safe ones (today's rule already includes them). Kept today's rule. A stricter mode ("today + confidence >= 0.6",
+  1 wrong in 1069 but only 18% automatic) is the option if wrong forwards must be near zero.

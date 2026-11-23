@@ -33,6 +33,7 @@ def main() -> None:
     parser.add_argument("--spam", action="store_true",
                         help="Also apply the spam filter from data/questions.json, as normal routing does (spam counts as manual_triage)")
     parser.add_argument("--out", help="Also write one CSV row per email (for experiments/calibration.py)")
+    parser.add_argument("--jsonl", help="Also write every decision with its full verdict (experiments/auto_tradeoff.py)")
     args = parser.parse_args()
 
     with Path(args.path).open(encoding="utf-8", newline="") as f:
@@ -70,7 +71,7 @@ def main() -> None:
             overruled = spam_overruled(people, args.spam_override_score)
             if not overruled:
                 path, got = "spam", MANUAL
-        row = {**test, "got": got, "path": path, "confidence": conf, "spam_overruled": overruled,
+        row = {**test, "verdict": verdict, "got": got, "path": path, "confidence": conf, "spam_overruled": overruled,
                "system_one_choice": verdict.get("system_one_choice"), "final_pick_prob": verdict.get("final_pick_prob"),
                "second_opinion": verdict.get("second_opinion"),
                "auto": path != "spam" and decide.safe_to_auto(path, verdict, got, args.auto_min_confidence,
@@ -102,6 +103,10 @@ def main() -> None:
             print(f"  {pid:<14} {n}")
         return
 
+    if args.jsonl:
+        with open(args.jsonl, "w", encoding="utf-8") as f:
+            for r in results:
+                f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
     if args.out:
         fields = ["expected", "got", "ok", "path", "confidence", "final_pick_prob", "system_one_choice", "agree",
                   "in_shortlist", "email"]
