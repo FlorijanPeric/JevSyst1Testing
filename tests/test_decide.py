@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import decide  # noqa: E402
 import settings  # noqa: E402
 from decide import (MANUAL, clean_email, combined_scores, fast_pick, is_nobody, is_unclear, keep_real_person, majority,  # noqa: E402
                     memory_pick, memory_hints, models_agree, memory_votes, pick_recipient, rerank_select, safe_to_auto, select_candidates, should_learn, spam_overruled)
@@ -268,3 +269,28 @@ def test_routing_toml_has_every_setting():
     assert s.model_limits.get("DeepSeek-V4.1-Flash", 0) <= 2  # DeepSeek allows at most 2 requests at once
     assert s.ranking in ("window", "grouped") and s.nobody_candidates in ("ranked", "always")
     assert 0 < s.manual_threshold <= 1 and 0 < s.spam_threshold <= 1
+
+
+# ---------- track record ----------
+
+def test_track_record_blocks_only_with_enough_bad_reviews():
+    t = decide.TrackRecord(window=10)
+    for right in (False, False, True, False):
+        t.add("jernej", right)
+    assert not t.blocked("jernej", min_reviews=5, min_precision=0.9)  # only 4 reviews
+    t.add("jernej", True)
+    assert t.blocked("jernej", min_reviews=5, min_precision=0.9)      # 2/5 right
+    assert not t.blocked("jernej", min_reviews=5, min_precision=0.0)  # 0 = off
+    assert not t.blocked("sara", min_reviews=5, min_precision=0.9)    # no reviews
+
+
+def test_track_record_recovers_and_ignores_nobody():
+    t = decide.TrackRecord(window=5)
+    for _ in range(5):
+        t.add("eva", False)
+    assert t.blocked("eva", 5, 0.9)
+    for _ in range(5):
+        t.add("eva", True)
+    assert t.precision("eva") == (5, 5) and not t.blocked("eva", 5, 0.9)
+    t.add(decide.MANUAL, False)
+    assert t.precision(decide.MANUAL) == (0, 0)

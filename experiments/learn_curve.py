@@ -26,7 +26,7 @@ from qdrant_client import QdrantClient  # noqa: E402
 import config  # noqa: E402
 from clients import embed_emails  # noqa: E402
 from decide import MANUAL, clean_email, is_nobody  # noqa: E402
-from route_email import add_routing_args, known_people, load_questions, remember, route  # noqa: E402
+from route_email import add_routing_args, known_people, load_questions, note_review, remember, route  # noqa: E402
 
 
 def final(result: dict) -> str:
@@ -45,6 +45,9 @@ def main() -> None:
 
     if config.ROUTED_COLLECTION == "routed_emails":
         sys.exit("Set ROUTED_COLLECTION to a temporary collection; this test wipes it.")
+    if Path(config.TRACK_RECORD) == Path("data/track_record.jsonl"):
+        sys.exit("Set TRACK_RECORD to a temporary file; this test wipes it.")
+    Path(config.TRACK_RECORD).unlink(missing_ok=True)
     client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
     if client.collection_exists(config.ROUTED_COLLECTION):
         client.delete_collection(config.ROUTED_COLLECTION)
@@ -68,8 +71,12 @@ def main() -> None:
             outs = list(pool.map(lambda r: route(client, r["email"], args, questions=spam_q), batch))
             for row, out in zip(batch, outs):
                 got = final(out)
-                results.append({"ok": got == row["expected"], "path": out["path"], "auto": out.get("auto", False)})
+                results.append({"ok": got == row["expected"], "path": out["path"], "auto": out.get("auto", False),
+                                "held": out.get("held", False)})
                 wrong, right = got != row["expected"], got == row["expected"]
+                # track record: every review; with corrections only, an auto-forward nobody corrected counts as right
+                if args.feedback == "all" or (args.feedback == "corrections" and (wrong or out.get("auto"))):
+                    note_review(got, row["expected"])
                 if (args.feedback != "none" and wrong) or (args.feedback == "all" and right):
                     text = clean_email(row["email"])
                     remember(client, text, embed_emails([text])[0], people[row["expected"]],
@@ -93,6 +100,9 @@ def main() -> None:
     print(f"last 100 emails: {sum(r['path'] != 'llm' for r in last)}/{len(last)} without system one")
     auto = [r for r in results if r["auto"]]
     print(f"auto-forwarded: {len(auto)}/{len(results)}, {sum(r['ok'] for r in auto)} right")
+    held = [r for r in results if r["held"]]
+    if held:
+        print(f"held back by the track record: {len(held)}, {sum(not r['ok'] for r in held)} of them would have been wrong")
     last_auto = [r for r in last if r["auto"]]
     print(f"last 100 auto-forwarded: {len(last_auto)}, {sum(r['ok'] for r in last_auto)} right")
     points = client.count(config.ROUTED_COLLECTION).count if client.collection_exists(config.ROUTED_COLLECTION) else 0

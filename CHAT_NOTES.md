@@ -297,3 +297,31 @@ Right of 1069 (handwritten / generated / reworded Qwen / reworded Gemma+GaMS):
 - The check models: Qwen3-30B ~0.2-0.25 s and GaMS ~0.3 s per answer (one 21 s Qwen answer was a cold start).
 - New metric in every `test_routing.py` run: `model time` (calls, median, p95, waiting for a free slot per model)
   and `score` (right, wrong auto-forwards, seconds per email).
+
+## Round 17, 2026-11-23: ideas 1-5 after round 16 (`run_round17.sh`)
+Baseline (default) 896 of 1069, 41 wrong auto-forwards (1 / 5 / 13 / 22).
+
+- **"Not for them" lines, fairly held out: the clear winner.** Split with `experiments/group_split.py` (rewordings of
+  the same email always in the same half: 1069 emails, 427 groups, halves 535 / 534), lines learned from the
+  mistakes on one half, tested on the other:
+
+  | test half | before | + not for them | + not for them + new duty lines |
+  |---|---|---|---|
+  | half 1 (535) | 452, 24 wrong auto | **470**, 12 wrong auto | 452, 17 wrong auto |
+  | half 2 (534) | 444, 17 wrong auto | **457**, 19 wrong auto | 441, 14 wrong auto |
+  | Jernej | 28/84, 12/34 | **49/84, 17/34** | 47/84, 21/34 |
+  | Ana | 24/31, 23/31 | 24/31, 28/31 | 24/31, 29/31 |
+
+  +31 of 1069 and 10 fewer wrong auto-forwards. The lines are general ("Leadership, strategic, and high-level
+  administrative matters -> Jernej", "Marketing, branding, and promotional content -> Ana"). New duty lines on top
+  undo the gain (they are embedded and pull search around): don't apply duty suggestions blindly.
+  Not applied to data/colleagues.csv (learned from test emails = fitting the test); use on real shadow mistakes.
+- System one choosing from more people: 6 = 894, 45 wrong auto; 8 = 895, 38 wrong auto, 510 auto-forwards
+  (502), search misses 51 -> 13, but each system one call is bigger and slower. Kept 5.
+- DeepSeek as a third check model: 896, 40 wrong auto (41), 4 fewer auto-forwards. Nothing gained. Off.
+- Track record per person (new: `auto_track_min_precision`, `decide.TrackRecord`, reviews in data/track_record.jsonl
+  from ok / fix / shadow reviews). Learning curve, feedback on everything:
+  normal sets: off 284 auto, 282 right; 90% held back 50, of which only 1 would have been wrong.
+  hard sets: off 354 auto, 348 right; 90% held back 70 (2 wrong); 80% held back 29 (2 wrong).
+  With memory and feedback the auto-forwards are already ~98% right, so it costs far more than it saves. Off;
+  it stays as a safety net for real use (a person whose profile breaks suddenly).

@@ -38,6 +38,7 @@ RERANK_MODEL = os.environ.get("RERANK_MODEL", "qwen3-reranker")
 # Audit trail and real labels (both gitignored; real emails)
 DECISIONS_LOG = os.environ.get("DECISIONS_LOG", "data/decisions.jsonl")
 REAL_LABELS = os.environ.get("REAL_LABELS", "data/real_labels.csv")
+TRACK_RECORD = os.environ.get("TRACK_RECORD", "data/track_record.jsonl")  # reviews: decided person, right or not
 # Corrections from `fix`, merged into the person's profile as example emails (gitignored; real emails)
 LEARNED_EXAMPLES = os.environ.get("LEARNED_EXAMPLES", "data/learned_examples.csv")
 # Tracked "nobody" profiles (spam, personal, wrong recipient), merged with data/colleagues.csv when loading

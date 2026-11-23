@@ -61,6 +61,10 @@ def add_routing_args(parser: argparse.ArgumentParser, settings: SimpleNamespace 
     parser.add_argument("--auto-fast-check-models", default=s.auto_fast_check_models)
     parser.add_argument("--auto-on-agreement", action=argparse.BooleanOptionalAction, default=s.auto_on_agreement,
                         help="Auto-forward system one picks every second-opinion model agreed with")
+    parser.add_argument("--auto-track-min-precision", type=float, default=s.auto_track_min_precision,
+                        help="No auto-forward to a person whose recent reviews were right less often (0 = off)")
+    parser.add_argument("--auto-track-min-reviews", type=int, default=s.auto_track_min_reviews)
+    parser.add_argument("--auto-track-window", type=int, default=s.auto_track_window)
     parser.add_argument("--memory", action=argparse.BooleanOptionalAction, default=s.memory,
                         help="Use similar past emails (corrections, confirmations, trusted decisions)")
     parser.add_argument("--memory-k", type=int, default=s.memory_k)

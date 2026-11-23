@@ -43,6 +43,10 @@ auto_fast_min_margin = 0.07  # a clear match is auto-forwarded only with this le
 auto_fast_check_models = "cjvt/GaMS3-12B-Instruct"  # must also pick the clear match. Round 14: clear matches
                              # auto-forwarded 143/144 right (was 158/168), Qwen3-30B on top adds nothing
 auto_on_agreement = true     # auto-forward system one picks that every model agreed with (gemma alone: 93%, too low)
+auto_track_min_precision = 0.0  # hold back auto-forwarding to a person whose recent reviewed decisions were right
+                             # less often than this (0 = off); see decide.TrackRecord
+auto_track_min_reviews = 5   # ... once they have at least this many reviews
+auto_track_window = 30       # ... counting the last this many reviews per person
 
 # Memory: learn from corrections (fix), confirmations (ok) and decisions two signals agreed on
 memory = true                # use similar past emails (off = round 3 behaviour)

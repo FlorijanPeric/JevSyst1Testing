@@ -2,6 +2,7 @@ import argparse
 import csv
 import hashlib
 import json
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -272,8 +273,54 @@ def fix(client: QdrantClient, email_text: str, person_id: str) -> str:
     text = clean_email(email_text)
     remember(client, text, embed_emails([text])[0], people[person_id], source="corrected")
     save_label(email_text, MANUAL if is_nobody(person_id) else person_id, "corrected")
+    last = last_decision(email_text)
+    if last is not None:
+        note_review(last["final"], person_id)
     return (f"Saved: emails like this now go to {people[person_id]['name']} ({person_id}). "
             f"Added to memory and to {config.REAL_LABELS}.")
+
+
+_track: decide.TrackRecord | None = None
+_track_lock = threading.Lock()
+
+
+def track_record(window: int = 30) -> decide.TrackRecord:
+    """Reviews so far (config.TRACK_RECORD), loaded once per process and kept up to date by note_review."""
+    global _track
+    with _track_lock:
+        if _track is None or _track.window != window:
+            _track = decide.TrackRecord(window)
+            path = Path(config.TRACK_RECORD)
+            if path.exists():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    entry = json.loads(line)
+                    _track.add(entry["decided"], entry["right"])
+        return _track
+
+
+def note_review(decided: str, correct: str) -> None:
+    """A human said what the right person was for a decision that went to `decided`: keep the track record."""
+    if not decided or is_nobody(decided) or decided == "spam":
+        return
+    right = decided == correct
+    path = Path(config.TRACK_RECORD)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _track_lock:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"time": datetime.now().isoformat(timespec="seconds"), "decided": decided,
+                                "correct": correct, "right": right}) + "\n")
+        if _track is not None:
+            _track.add(decided, right)
+
+
+def last_decision(email_text: str) -> dict | None:
+    path, wanted, last = Path(config.DECISIONS_LOG), email_id(email_text), None
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            entry = json.loads(line)
+            if entry["id"] == wanted:
+                last = entry
+    return last
 
 
 def known_people(client: QdrantClient) -> dict:
@@ -374,7 +421,12 @@ def route(client: QdrantClient, email_text: str, args, smart: bool = True, quest
     auto = path != "spam" and decide.safe_to_auto(path, verdict, choice, getattr(args, "auto_min_confidence", 2.0),
                                                        getattr(args, "auto_on_agreement", False),
                                                        getattr(args, "auto_fast_min_margin", 0.0))
-    return {"path": path, "person": person, "score": person["score"] if person else None, "people": people,
+    held = False
+    if auto and getattr(args, "auto_track_min_precision", 0) > 0:
+        held = track_record(args.auto_track_window).blocked(choice, args.auto_track_min_reviews,
+                                                             args.auto_track_min_precision)
+        auto = not held
+    return {"path": path, "held": held, "person": person, "score": person["score"] if person else None, "people": people,
             "answers": answers, "verdict": verdict, "timer": timer, "auto": auto}
 
 
@@ -481,16 +533,12 @@ def save_label(email_text: str, expected: str, source: str) -> None:
 
 def confirm(email_text: str, client: QdrantClient | None = None) -> str:
     """Mark the last logged decision for this email as right (and, with a client, add it to memory)."""
-    path, wanted, last = Path(config.DECISIONS_LOG), email_id(email_text), None
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            entry = json.loads(line)
-            if entry["id"] == wanted:
-                last = entry
+    last = last_decision(email_text)
     if last is None:
         return "No logged decision for this email. Route it first, or use fix to give the right person."
     expected = MANUAL if last["final"] == "spam" or is_nobody(last["final"]) else last["final"]
     save_label(email_text, expected, "confirmed")
+    note_review(last["final"], expected)
     if client is not None and expected in known_people(client):
         text = clean_email(email_text)
         remember(client, text, embed_emails([text])[0], known_people(client)[expected], source="confirmed")

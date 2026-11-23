@@ -198,6 +198,32 @@ def safe_to_auto(path: str, verdict: dict, choice: str, min_confidence: float, o
     return (verdict.get("confidence") or 0) >= min_confidence or (on_agreement and models_agree(verdict, choice))
 
 
+class TrackRecord:
+    """How often recent decisions for each person turned out right, from reviews (ok / fix).
+
+    Used to hold back auto-forwarding to a person the router keeps getting wrong: with at least min_reviews of
+    the last `window` reviewed decisions for them and fewer than min_precision right, their emails wait for a
+    human. Decisions still go to that person; only the automatic forward stops, and it comes back by itself
+    once enough reviews are right again."""
+
+    def __init__(self, window: int = 30):
+        self.window = window
+        self.history: dict[str, list[bool]] = {}
+
+    def add(self, decided: str, right: bool) -> None:
+        if decided and not is_nobody(decided):
+            self.history.setdefault(decided, []).append(bool(right))
+            del self.history[decided][:-self.window]
+
+    def precision(self, person: str) -> tuple[int, int]:
+        h = self.history.get(person, [])
+        return sum(h), len(h)
+
+    def blocked(self, person: str, min_reviews: int, min_precision: float) -> bool:
+        right, n = self.precision(person)
+        return min_precision > 0 and n >= min_reviews and right / n < min_precision
+
+
 def models_agree(verdict: dict, choice: str) -> bool:
     """System one and every second-opinion model picked `choice`, and so did every check model asked
     (auto_check: models that only confirm a decision for auto-forwarding, they never change it)."""
